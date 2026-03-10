@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "properties": {
+    "doctype": { "type": "string" },
+    "naming_series": { "type": "string" },
+    "supplier": { "type": "string" },
+    "supplier_name": { "type": ["string", "null"] },
+    "company": { "type": ["string", "null"] },
+    "posting_date": { "type": "string" },
+    "due_date": { "type": ["string", "null"] },
+    "bill_no": { "type": ["string", "null"] },
+    "bill_date": { "type": ["string", "null"] },
+    "currency": { "type": ["string", "null"] },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item_code": { "type": ["string", "null"] },
+          "item_name": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "qty": { "type": "number" },
+          "uom": { "type": "string" },
+          "rate": { "type": "number" },
+          "amount": { "type": ["number", "null"] },
+          "discount_percentage": { "type": ["number", "null"] },
+          "discount_amount": { "type": ["number", "null"] }
+        },
+        "required": ["item_name", "qty", "rate"]
+      }
+    },
+    "taxes": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "charge_type": { "type": "string" },
+          "account_head": { "type": ["string", "null"] },
+          "description": { "type": "string" },
+          "rate": { "type": ["number", "null"] },
+          "tax_amount": { "type": ["number", "null"] }
+        },
+        "required": ["description"]
+      }
+    },
+    "total": { "type": ["number", "null"] },
+    "discount_amount": { "type": ["number", "null"] },
+    "grand_total": { "type": ["number", "null"] },
+    "remarks": { "type": ["string", "null"] },
+    "docstatus": { "type": "integer" }
+  },
+  "required": ["supplier", "posting_date", "items"]
+}

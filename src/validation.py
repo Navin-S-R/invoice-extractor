@@ -1,0 +1,336 @@
+"""Validate extraction quality for benchmarking.
+
+Covers common AI vision extraction failures:
+- Numerical hallucinations and value fabrication
+- Currency symbol/separator misparses
+- Digit transposition and character substitution
+- Duplicate/skipped line items
+- Date format ambiguity
+- Watermark text leaking into data
+- Calculation mismatches (items vs totals)
+- Decimal precision errors
+- Discount consistency
+"""
+
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+
+from .models import PurchaseInvoice
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TOLERANCE = 0.02  # 2% tolerance for numeric comparisons
+
+# Currency symbols that should NOT appear in currency code field
+_CURRENCY_SYMBOLS = re.compile(r"[₹$€£¥]|Rs\.?")
+
+# Characters that suggest OCR/vision confusion in text fields
+_SUSPICIOUS_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+# Common watermark/stamp text patterns
+_WATERMARK_PATTERNS = re.compile(
+    r"(?i)\b(draft|copy|duplicate|sample|specimen|cancelled|void|confidential|original)\b"
+)
+
+# Valid ISO 4217 currency codes (common ones)
+_VALID_CURRENCIES = {
+    "INR", "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", "HKD",
+    "SGD", "AED", "SAR", "BDT", "LKR", "NPR", "PKR", "MYR", "THB", "IDR",
+    "PHP", "VND", "KRW", "TWD", "NZD", "ZAR", "BRL", "MXN", "RUB", "TRY",
+    "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "ILS", "EGP", "KWD", "QAR",
+    "BHD", "OMR", "JOD",
+}
+
+
+@dataclass
+class ValidationResult:
+    """Quality checks on an extracted invoice."""
+    checks_passed: int = 0
+    checks_total: int = 0
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        """Quality score from 0.0 to 1.0."""
+        return self.checks_passed / self.checks_total if self.checks_total else 0.0
+
+    @property
+    def score_pct(self) -> int:
+        """Quality score as integer percentage."""
+        return round(self.score * 100)
+
+
+def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
+    """Run all quality checks against an extracted invoice."""
+    v = ValidationResult()
+
+    # ── 1. Required fields ──────────────────────────────────────────
+    _check(v, bool(invoice.supplier), "supplier is present", "supplier is empty")
+    _check(v, bool(invoice.posting_date), "posting_date is present", "posting_date is empty")
+    _check(v, len(invoice.items) > 0, "has at least 1 line item", "no line items extracted")
+
+    # ── 2. Date format & validity ───────────────────────────────────
+    for date_field in ("posting_date", "due_date", "bill_date"):
+        val = getattr(invoice, date_field)
+        if val:
+            _check(v, bool(_DATE_RE.match(val)),
+                   f"{date_field} is YYYY-MM-DD", f"{date_field} bad format: {val}")
+            if _DATE_RE.match(val):
+                _check_date_valid(v, val, date_field)
+
+    # Check date logical order: bill_date <= posting_date <= due_date
+    if invoice.posting_date and invoice.due_date:
+        if _DATE_RE.match(invoice.posting_date) and _DATE_RE.match(invoice.due_date):
+            _check(v, invoice.due_date >= invoice.posting_date,
+                   "due_date >= posting_date",
+                   f"due_date ({invoice.due_date}) is before posting_date ({invoice.posting_date})")
+
+    # ── 3. Currency validation ──────────────────────────────────────
+    if invoice.currency:
+        has_symbol = bool(_CURRENCY_SYMBOLS.search(invoice.currency))
+        _check(v, not has_symbol, "currency has no symbols",
+               f"currency contains symbol: '{invoice.currency}' — expected ISO code like INR, USD")
+        _check(v, len(invoice.currency) == 3 and invoice.currency.isalpha(),
+               "currency is 3-letter code", f"currency bad format: '{invoice.currency}'")
+        if len(invoice.currency) == 3 and invoice.currency.isalpha():
+            is_known = invoice.currency.upper() in _VALID_CURRENCIES
+            if not is_known:
+                v.warnings.append(f"currency '{invoice.currency}' not in common ISO 4217 list")
+
+    # ── 4. Supplier name sanity ─────────────────────────────────────
+    if invoice.supplier:
+        # Check for watermark/stamp text leaking into supplier name
+        if _WATERMARK_PATTERNS.search(invoice.supplier):
+            v.warnings.append(
+                f"supplier '{invoice.supplier}' contains watermark-like text "
+                f"(DRAFT/COPY/SAMPLE/etc.) — may be extracted from background")
+        # Check for control characters (OCR garbage)
+        if _SUSPICIOUS_CHARS.search(invoice.supplier):
+            v.warnings.append(f"supplier contains control characters — possible OCR error")
+        # Suspiciously short supplier name
+        if len(invoice.supplier.strip()) < 2:
+            v.warnings.append(f"supplier name too short: '{invoice.supplier}'")
+
+    # ── 5. Line item checks ─────────────────────────────────────────
+    for i, item in enumerate(invoice.items, 1):
+        prefix = f"item[{i}]"
+        _check(v, bool(item.item_name), f"{prefix} has item_name", f"{prefix} missing item_name")
+        _check(v, item.qty > 0, f"{prefix} qty > 0", f"{prefix} qty is {item.qty}")
+        _check(v, item.rate >= 0, f"{prefix} rate >= 0", f"{prefix} rate is {item.rate}")
+
+        # amount = qty * rate consistency (accounting for discounts)
+        if item.amount is not None:
+            expected = item.qty * item.rate
+            if item.discount_percentage is not None and item.discount_percentage > 0:
+                discount = expected * item.discount_percentage / 100
+                expected_after_disc = expected - discount
+                _check_numeric(v, item.amount, expected_after_disc,
+                               f"{prefix} amount matches qty*rate - discount%")
+            elif item.discount_amount is not None and item.discount_amount > 0:
+                expected_after_disc = expected - item.discount_amount
+                _check_numeric(v, item.amount, expected_after_disc,
+                               f"{prefix} amount matches qty*rate - discount_amount")
+            else:
+                _check_numeric(v, item.amount, expected, f"{prefix} amount matches qty*rate")
+
+        # Discount consistency
+        if item.discount_percentage is not None:
+            _check(v, 0 <= item.discount_percentage <= 100,
+                   f"{prefix} discount_percentage in 0-100",
+                   f"{prefix} discount_percentage out of range: {item.discount_percentage}")
+        if item.discount_amount is not None and item.discount_amount > 0:
+            gross = item.qty * item.rate
+            _check(v, item.discount_amount <= gross,
+                   f"{prefix} discount_amount <= gross",
+                   f"{prefix} discount_amount ({item.discount_amount}) > gross ({gross})")
+
+        # Check item_name for control chars or pure numeric (likely misparse)
+        if item.item_name:
+            if _SUSPICIOUS_CHARS.search(item.item_name):
+                v.warnings.append(f"{prefix} item_name contains control characters")
+            if item.item_name.replace(".", "").replace(",", "").strip().isdigit():
+                v.warnings.append(
+                    f"{prefix} item_name is purely numeric: '{item.item_name}' — "
+                    f"possible column misalignment")
+
+    # ── 6. Duplicate line items detection ───────────────────────────
+    if len(invoice.items) > 1:
+        # Check for exact duplicates (same name + qty + rate)
+        item_signatures = [
+            (item.item_name, item.qty, item.rate) for item in invoice.items
+        ]
+        sig_counts = Counter(item_signatures)
+        for sig, count in sig_counts.items():
+            if count > 1:
+                v.warnings.append(
+                    f"duplicate line item detected: '{sig[0]}' (qty={sig[1]}, rate={sig[2]}) "
+                    f"appears {count} times — verify not a hallucination")
+
+        # Check for suspiciously identical amounts across all items
+        if len(invoice.items) >= 3:
+            amounts = [item.amount for item in invoice.items if item.amount is not None]
+            if amounts and len(set(amounts)) == 1 and len(amounts) >= 3:
+                v.warnings.append(
+                    f"all {len(amounts)} items have identical amount ({amounts[0]}) "
+                    f"— possible hallucination")
+
+    # ── 7. Total vs line items ──────────────────────────────────────
+    items_sum = sum(
+        (item.amount if item.amount is not None else item.qty * item.rate)
+        for item in invoice.items
+    )
+    if invoice.total is not None:
+        _check_numeric(v, invoice.total, items_sum, "total matches sum of line items")
+
+    # ── 8. Invoice-level discount ───────────────────────────────────
+    if invoice.discount_amount is not None and invoice.discount_amount > 0:
+        if invoice.total is not None:
+            _check(v, invoice.discount_amount <= invoice.total,
+                   "discount_amount <= total",
+                   f"discount_amount ({invoice.discount_amount}) > total ({invoice.total})")
+
+    # ── 9. Grand total vs total + taxes ─────────────────────────────
+    if invoice.grand_total is not None:
+        if invoice.total is not None:
+            tax_sum = 0.0
+            if invoice.taxes:
+                for tax in invoice.taxes:
+                    if tax.tax_amount is not None:
+                        tax_sum += tax.tax_amount
+                    elif tax.rate is not None and invoice.total:
+                        tax_sum += invoice.total * tax.rate / 100
+
+            discount = invoice.discount_amount or 0.0
+            if tax_sum > 0:
+                expected_grand = invoice.total - discount + tax_sum
+                _check_numeric(v, invoice.grand_total, expected_grand,
+                               "grand_total matches total - discount + taxes")
+            elif discount > 0:
+                _check(v, invoice.grand_total <= invoice.total,
+                       "grand_total <= total (discount applied)",
+                       f"grand_total ({invoice.grand_total}) > total ({invoice.total}) despite discount")
+            else:
+                _check(
+                    v,
+                    invoice.grand_total >= invoice.total,
+                    "grand_total >= total",
+                    f"grand_total ({invoice.grand_total}) < total ({invoice.total})",
+                )
+
+    # ── 10. Magnitude sanity — catch 10x/100x misreads ─────────────
+    if invoice.grand_total is not None and items_sum > 0:
+        ratio = invoice.grand_total / items_sum
+        # Grand total should be between 0.5x and 3x of items sum
+        # (allows for up to 200% tax which covers edge cases)
+        if ratio > 3.0 or ratio < 0.5:
+            v.warnings.append(
+                f"grand_total ({invoice.grand_total}) is {ratio:.1f}x of items sum "
+                f"({items_sum:.2f}) — possible magnitude error (10x/100x misread)")
+
+    # ── 11. Decimal precision (separator misparse detection) ────────
+    _check_decimal_precision(v, invoice.total, "total")
+    _check_decimal_precision(v, invoice.grand_total, "grand_total")
+    for i, item in enumerate(invoice.items, 1):
+        _check_decimal_precision(v, item.rate, f"item[{i}] rate")
+        _check_decimal_precision(v, item.amount, f"item[{i}] amount")
+
+    # ── 12. Tax checks ──────────────────────────────────────────────
+    if invoice.taxes:
+        for i, tax in enumerate(invoice.taxes, 1):
+            prefix = f"tax[{i}]"
+            _check(v, bool(tax.description), f"{prefix} has description",
+                   f"{prefix} missing description")
+            if tax.rate is not None:
+                _check(v, 0 < tax.rate <= 100,
+                       f"{prefix} rate in valid range",
+                       f"{prefix} rate looks wrong: {tax.rate}%")
+            if tax.tax_amount is not None:
+                _check_decimal_precision(v, tax.tax_amount, f"{prefix} tax_amount")
+                # Tax amount should not exceed grand_total
+                if invoice.grand_total and tax.tax_amount > invoice.grand_total:
+                    v.warnings.append(
+                        f"{prefix} tax_amount ({tax.tax_amount}) exceeds "
+                        f"grand_total ({invoice.grand_total})")
+
+    # ── 13. Bill number sanity ──────────────────────────────────────
+    if invoice.bill_no:
+        # Check for suspiciously long bill numbers (possible description leak)
+        if len(invoice.bill_no) > 50:
+            v.warnings.append(
+                f"bill_no is unusually long ({len(invoice.bill_no)} chars) — "
+                f"possible field misalignment")
+        # Check for control characters
+        if _SUSPICIOUS_CHARS.search(invoice.bill_no):
+            v.warnings.append("bill_no contains control characters")
+
+    # ── 14. Negative values detection ───────────────────────────────
+    if invoice.total is not None and invoice.total < 0:
+        v.warnings.append(f"total is negative ({invoice.total}) — unusual for purchase invoice")
+    if invoice.grand_total is not None and invoice.grand_total < 0:
+        v.warnings.append(f"grand_total is negative ({invoice.grand_total}) — unusual for purchase invoice")
+
+    return v
+
+
+# ── Helper functions ─────────────────────────────────────────────────
+
+
+def _check(v: ValidationResult, condition: bool, pass_msg: str, fail_msg: str):
+    """Record a pass/fail check."""
+    v.checks_total += 1
+    if condition:
+        v.checks_passed += 1
+    else:
+        v.errors.append(fail_msg)
+
+
+def _check_numeric(v: ValidationResult, actual: float, expected: float, label: str):
+    """Check numeric value within tolerance."""
+    v.checks_total += 1
+    if expected == 0:
+        if abs(actual) < 0.01:
+            v.checks_passed += 1
+        else:
+            v.errors.append(f"{label}: got {actual}, expected ~0")
+        return
+
+    diff_pct = abs(actual - expected) / abs(expected)
+    if diff_pct <= _TOLERANCE:
+        v.checks_passed += 1
+    else:
+        v.warnings.append(f"{label}: got {actual}, expected {expected:.2f} (diff {diff_pct:.1%})")
+
+
+def _check_date_valid(v: ValidationResult, date_str: str, field_name: str):
+    """Check that a YYYY-MM-DD date is a real calendar date."""
+    try:
+        year, month, day = map(int, date_str.split("-"))
+        # Basic range checks
+        if not (1900 <= year <= 2100):
+            v.warnings.append(f"{field_name} year {year} looks unusual")
+        if not (1 <= month <= 12):
+            v.errors.append(f"{field_name} invalid month: {month}")
+            return
+        if not (1 <= day <= 31):
+            v.errors.append(f"{field_name} invalid day: {day}")
+            return
+        # Validate via datetime
+        from datetime import date
+        date(year, month, day)
+    except (ValueError, TypeError):
+        v.errors.append(f"{field_name} is not a valid date: {date_str}")
+
+
+def _check_decimal_precision(v: ValidationResult, value: float | None, label: str):
+    """Warn if a monetary value has more than 2 decimal places.
+
+    This catches currency separator misparses like:
+    - "12.345" from European "12,345" (should be 12345)
+    - "1.500" from European "1.500" (should be 1500)
+    """
+    if value is None:
+        return
+    rounded = round(value, 2)
+    if abs(value - rounded) > 1e-9:
+        v.warnings.append(f"{label} has >2 decimal places: {value} (expected {rounded})")
