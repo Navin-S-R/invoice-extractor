@@ -10,16 +10,27 @@ Covers common AI vision extraction failures:
 - Calculation mismatches (items vs totals)
 - Decimal precision errors
 - Discount consistency
+- Tax ID format validation (GSTIN, VAT, EIN, etc.)
 """
 
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .models import PurchaseInvoice
+from .models import PurchaseInvoice, TaxIdentifiers
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TOLERANCE = 0.02  # 2% tolerance for numeric comparisons
+
+# Indian formats
+_GSTIN_RE = re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d][A-Z\d]$")
+_PAN_RE = re.compile(r"^[A-Z]{5}\d{4}[A-Z]$")
+_IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
+
+# International formats
+_EU_VAT_RE = re.compile(r"^[A-Z]{2}\d{2,13}$")  # EU VAT: 2-letter country + digits
+_IBAN_RE = re.compile(r"^[A-Z]{2}\d{2}[A-Z0-9]{4,30}$")
+_SWIFT_RE = re.compile(r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$")
 
 # Currency symbols that should NOT appear in currency code field
 _CURRENCY_SYMBOLS = re.compile(r"[₹$€£¥]|Rs\.?")
@@ -61,9 +72,23 @@ class ValidationResult:
         return round(self.score * 100)
 
 
+def _is_indian_invoice(invoice: PurchaseInvoice) -> bool:
+    """Detect if this is an Indian invoice based on currency, GSTIN, or country."""
+    if invoice.currency == "INR":
+        return True
+    if invoice.supplier_tax_ids and invoice.supplier_tax_ids.gstin:
+        return True
+    if invoice.company_tax_ids and invoice.company_tax_ids.gstin:
+        return True
+    if invoice.supplier_address and invoice.supplier_address.country.lower().strip() in ("india", "in"):
+        return True
+    return False
+
+
 def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
     """Run all quality checks against an extracted invoice."""
     v = ValidationResult()
+    is_indian = _is_indian_invoice(invoice)
 
     # ── 1. Required fields ──────────────────────────────────────────
     _check(v, bool(invoice.supplier), "supplier is present", "supplier is empty")
@@ -98,21 +123,47 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
             if not is_known:
                 v.warnings.append(f"currency '{invoice.currency}' not in common ISO 4217 list")
 
-    # ── 4. Supplier name sanity ─────────────────────────────────────
+    # ── 4. Tax ID validation (jurisdiction-aware) ───────────────────
+    _validate_tax_ids(v, invoice.supplier_tax_ids, "supplier", is_indian)
+    _validate_tax_ids(v, invoice.company_tax_ids, "company", is_indian)
+
+    # Cross-check: supplier GSTIN should contain supplier PAN
+    if invoice.supplier_tax_ids:
+        ids = invoice.supplier_tax_ids
+        if ids.gstin and ids.pan and _GSTIN_RE.match(ids.gstin.strip().upper()):
+            _check(v, ids.gstin.strip().upper()[2:12] == ids.pan.strip().upper(),
+                   "supplier GSTIN contains matching PAN",
+                   f"supplier PAN ({ids.pan}) doesn't match GSTIN chars 3-12 ({ids.gstin[2:12]})")
+
+    # ── 5. Bank details validation ──────────────────────────────────
+    if invoice.supplier_bank:
+        bank = invoice.supplier_bank
+        if bank.ifsc_code:
+            _check(v, bool(_IFSC_RE.match(bank.ifsc_code.strip().upper())),
+                   "supplier_bank.ifsc_code is valid format",
+                   f"supplier_bank.ifsc_code invalid: '{bank.ifsc_code}' (expected like HDFC0001234)")
+        if bank.swift_code:
+            _check(v, bool(_SWIFT_RE.match(bank.swift_code.strip().upper())),
+                   "supplier_bank.swift_code is valid format",
+                   f"supplier_bank.swift_code invalid: '{bank.swift_code}' (expected 8 or 11 chars like HDFCINBB)")
+        if bank.iban:
+            iban = bank.iban.replace(" ", "").upper()
+            _check(v, bool(_IBAN_RE.match(iban)) and len(iban) >= 15,
+                   "supplier_bank.iban is valid format",
+                   f"supplier_bank.iban invalid: '{bank.iban}' (expected like DE89370400440532013000)")
+
+    # ── 6. Supplier name sanity ─────────────────────────────────────
     if invoice.supplier:
-        # Check for watermark/stamp text leaking into supplier name
         if _WATERMARK_PATTERNS.search(invoice.supplier):
             v.warnings.append(
                 f"supplier '{invoice.supplier}' contains watermark-like text "
                 f"(DRAFT/COPY/SAMPLE/etc.) — may be extracted from background")
-        # Check for control characters (OCR garbage)
         if _SUSPICIOUS_CHARS.search(invoice.supplier):
             v.warnings.append(f"supplier contains control characters — possible OCR error")
-        # Suspiciously short supplier name
         if len(invoice.supplier.strip()) < 2:
             v.warnings.append(f"supplier name too short: '{invoice.supplier}'")
 
-    # ── 5. Line item checks ─────────────────────────────────────────
+    # ── 7. Line item checks ─────────────────────────────────────────
     for i, item in enumerate(invoice.items, 1):
         prefix = f"item[{i}]"
         _check(v, bool(item.item_name), f"{prefix} has item_name", f"{prefix} missing item_name")
@@ -154,9 +205,8 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                     f"{prefix} item_name is purely numeric: '{item.item_name}' — "
                     f"possible column misalignment")
 
-    # ── 6. Duplicate line items detection ───────────────────────────
+    # ── 8. Duplicate line items detection ───────────────────────────
     if len(invoice.items) > 1:
-        # Check for exact duplicates (same name + qty + rate)
         item_signatures = [
             (item.item_name, item.qty, item.rate) for item in invoice.items
         ]
@@ -167,7 +217,6 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                     f"duplicate line item detected: '{sig[0]}' (qty={sig[1]}, rate={sig[2]}) "
                     f"appears {count} times — verify not a hallucination")
 
-        # Check for suspiciously identical amounts across all items
         if len(invoice.items) >= 3:
             amounts = [item.amount for item in invoice.items if item.amount is not None]
             if amounts and len(set(amounts)) == 1 and len(amounts) >= 3:
@@ -175,7 +224,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                     f"all {len(amounts)} items have identical amount ({amounts[0]}) "
                     f"— possible hallucination")
 
-    # ── 7. Total vs line items ──────────────────────────────────────
+    # ── 9. Total vs line items ──────────────────────────────────────
     items_sum = sum(
         (item.amount if item.amount is not None else item.qty * item.rate)
         for item in invoice.items
@@ -183,14 +232,14 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
     if invoice.total is not None:
         _check_numeric(v, invoice.total, items_sum, "total matches sum of line items")
 
-    # ── 8. Invoice-level discount ───────────────────────────────────
+    # ── 10. Invoice-level discount ──────────────────────────────────
     if invoice.discount_amount is not None and invoice.discount_amount > 0:
         if invoice.total is not None:
             _check(v, invoice.discount_amount <= invoice.total,
                    "discount_amount <= total",
                    f"discount_amount ({invoice.discount_amount}) > total ({invoice.total})")
 
-    # ── 9. Grand total vs total + taxes ─────────────────────────────
+    # ── 11. Grand total vs total + taxes ────────────────────────────
     if invoice.grand_total is not None:
         if invoice.total is not None:
             tax_sum = 0.0
@@ -218,24 +267,22 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                     f"grand_total ({invoice.grand_total}) < total ({invoice.total})",
                 )
 
-    # ── 10. Magnitude sanity — catch 10x/100x misreads ─────────────
+    # ── 12. Magnitude sanity — catch 10x/100x misreads ──────────────
     if invoice.grand_total is not None and items_sum > 0:
         ratio = invoice.grand_total / items_sum
-        # Grand total should be between 0.5x and 3x of items sum
-        # (allows for up to 200% tax which covers edge cases)
         if ratio > 3.0 or ratio < 0.5:
             v.warnings.append(
                 f"grand_total ({invoice.grand_total}) is {ratio:.1f}x of items sum "
                 f"({items_sum:.2f}) — possible magnitude error (10x/100x misread)")
 
-    # ── 11. Decimal precision (separator misparse detection) ────────
+    # ── 13. Decimal precision (separator misparse detection) ─────────
     _check_decimal_precision(v, invoice.total, "total")
     _check_decimal_precision(v, invoice.grand_total, "grand_total")
     for i, item in enumerate(invoice.items, 1):
         _check_decimal_precision(v, item.rate, f"item[{i}] rate")
         _check_decimal_precision(v, item.amount, f"item[{i}] amount")
 
-    # ── 12. Tax checks ──────────────────────────────────────────────
+    # ── 14. Tax checks ──────────────────────────────────────────────
     if invoice.taxes:
         for i, tax in enumerate(invoice.taxes, 1):
             prefix = f"tax[{i}]"
@@ -247,24 +294,21 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                        f"{prefix} rate looks wrong: {tax.rate}%")
             if tax.tax_amount is not None:
                 _check_decimal_precision(v, tax.tax_amount, f"{prefix} tax_amount")
-                # Tax amount should not exceed grand_total
                 if invoice.grand_total and tax.tax_amount > invoice.grand_total:
                     v.warnings.append(
                         f"{prefix} tax_amount ({tax.tax_amount}) exceeds "
                         f"grand_total ({invoice.grand_total})")
 
-    # ── 13. Bill number sanity ──────────────────────────────────────
+    # ── 15. Bill number sanity ──────────────────────────────────────
     if invoice.bill_no:
-        # Check for suspiciously long bill numbers (possible description leak)
         if len(invoice.bill_no) > 50:
             v.warnings.append(
                 f"bill_no is unusually long ({len(invoice.bill_no)} chars) — "
                 f"possible field misalignment")
-        # Check for control characters
         if _SUSPICIOUS_CHARS.search(invoice.bill_no):
             v.warnings.append("bill_no contains control characters")
 
-    # ── 14. Negative values detection ───────────────────────────────
+    # ── 16. Negative values detection ───────────────────────────────
     if invoice.total is not None and invoice.total < 0:
         v.warnings.append(f"total is negative ({invoice.total}) — unusual for purchase invoice")
     if invoice.grand_total is not None and invoice.grand_total < 0:
@@ -274,6 +318,39 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
 
 
 # ── Helper functions ─────────────────────────────────────────────────
+
+
+def _validate_tax_ids(v: ValidationResult, ids: TaxIdentifiers | None, party: str, is_indian: bool):
+    """Validate tax identifiers based on jurisdiction."""
+    if ids is None:
+        return
+
+    # Indian GSTIN
+    if ids.gstin:
+        gstin = ids.gstin.strip().upper()
+        _check(v, bool(_GSTIN_RE.match(gstin)),
+               f"{party} GSTIN is valid format",
+               f"{party} GSTIN invalid: '{ids.gstin}' (expected 15-char like 29AABCU9603R1ZM)")
+
+    # Indian PAN
+    if ids.pan:
+        _check(v, bool(_PAN_RE.match(ids.pan.strip().upper())),
+               f"{party} PAN is valid format",
+               f"{party} PAN invalid: '{ids.pan}' (expected 10-char like AABCU9603R)")
+
+    # EU/UK VAT ID
+    if ids.vat_id:
+        vat = ids.vat_id.replace(" ", "").upper()
+        _check(v, bool(_EU_VAT_RE.match(vat)) and len(vat) >= 4,
+               f"{party} VAT ID is valid format",
+               f"{party} VAT ID invalid: '{ids.vat_id}' (expected like GB123456789 or DE123456789)")
+
+    # Generic tax_id — just check it's not suspiciously long or has control chars
+    if ids.tax_id:
+        if len(ids.tax_id) > 30:
+            v.warnings.append(f"{party} tax_id is very long ({len(ids.tax_id)} chars) — possible field leak")
+        if _SUSPICIOUS_CHARS.search(ids.tax_id):
+            v.warnings.append(f"{party} tax_id contains control characters")
 
 
 def _check(v: ValidationResult, condition: bool, pass_msg: str, fail_msg: str):
@@ -306,7 +383,6 @@ def _check_date_valid(v: ValidationResult, date_str: str, field_name: str):
     """Check that a YYYY-MM-DD date is a real calendar date."""
     try:
         year, month, day = map(int, date_str.split("-"))
-        # Basic range checks
         if not (1900 <= year <= 2100):
             v.warnings.append(f"{field_name} year {year} looks unusual")
         if not (1 <= month <= 12):
@@ -315,7 +391,6 @@ def _check_date_valid(v: ValidationResult, date_str: str, field_name: str):
         if not (1 <= day <= 31):
             v.errors.append(f"{field_name} invalid day: {day}")
             return
-        # Validate via datetime
         from datetime import date
         date(year, month, day)
     except (ValueError, TypeError):

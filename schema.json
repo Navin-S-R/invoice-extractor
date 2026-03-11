@@ -3,28 +3,109 @@
   "properties": {
     "doctype": { "type": "string" },
     "naming_series": { "type": "string" },
+
     "supplier": { "type": "string" },
-    "supplier_name": { "type": ["string", "null"] },
-    "company": { "type": ["string", "null"] },
+    "supplier_name": { "type": "string" },
+    "supplier_tax_ids": {
+      "type": "object",
+      "properties": {
+        "gstin": { "type": "string" },
+        "pan": { "type": "string" },
+        "vat_id": { "type": "string" },
+        "tax_id": { "type": "string" },
+        "tax_id_type": { "type": "string" }
+      }
+    },
+    "supplier_address": {
+      "type": "object",
+      "properties": {
+        "address_line1": { "type": "string" },
+        "address_line2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "pincode": { "type": "string" },
+        "country": { "type": "string" },
+        "state_code": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "supplier_bank": {
+      "type": "object",
+      "properties": {
+        "bank_name": { "type": "string" },
+        "branch": { "type": "string" },
+        "account_number": { "type": "string" },
+        "ifsc_code": { "type": "string" },
+        "swift_code": { "type": "string" },
+        "iban": { "type": "string" },
+        "routing_number": { "type": "string" },
+        "account_type": { "type": "string" }
+      }
+    },
+
+    "company": { "type": "string" },
+    "company_tax_ids": {
+      "type": "object",
+      "properties": {
+        "gstin": { "type": "string" },
+        "pan": { "type": "string" },
+        "vat_id": { "type": "string" },
+        "tax_id": { "type": "string" },
+        "tax_id_type": { "type": "string" }
+      }
+    },
+    "billing_address": {
+      "type": "object",
+      "properties": {
+        "address_line1": { "type": "string" },
+        "address_line2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "pincode": { "type": "string" },
+        "country": { "type": "string" },
+        "state_code": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "shipping_address": {
+      "type": "object",
+      "properties": {
+        "address_line1": { "type": "string" },
+        "address_line2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "pincode": { "type": "string" },
+        "country": { "type": "string" },
+        "state_code": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "place_of_supply": { "type": "string" },
+
     "posting_date": { "type": "string" },
     "due_date": { "type": ["string", "null"] },
     "bill_no": { "type": ["string", "null"] },
     "bill_date": { "type": ["string", "null"] },
-    "currency": { "type": ["string", "null"] },
+    "currency": { "type": "string" },
+
     "items": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "item_code": { "type": ["string", "null"] },
+          "item_code": { "type": "string" },
           "item_name": { "type": "string" },
-          "description": { "type": ["string", "null"] },
+          "description": { "type": "string" },
           "qty": { "type": "number" },
           "uom": { "type": "string" },
           "rate": { "type": "number" },
           "amount": { "type": ["number", "null"] },
           "discount_percentage": { "type": ["number", "null"] },
-          "discount_amount": { "type": ["number", "null"] }
+          "discount_amount": { "type": ["number", "null"] },
+          "hsn_sac": { "type": "string" }
         },
         "required": ["item_name", "qty", "rate"]
       }
@@ -35,7 +116,7 @@
         "type": "object",
         "properties": {
           "charge_type": { "type": "string" },
-          "account_head": { "type": ["string", "null"] },
+          "account_head": { "type": "string" },
           "description": { "type": "string" },
           "rate": { "type": ["number", "null"] },
           "tax_amount": { "type": ["number", "null"] }
@@ -46,7 +127,7 @@
     "total": { "type": ["number", "null"] },
     "discount_amount": { "type": ["number", "null"] },
     "grand_total": { "type": ["number", "null"] },
-    "remarks": { "type": ["string", "null"] },
+    "remarks": { "type": "string" },
     "docstatus": { "type": "integer" }
   },
   "required": ["supplier", "posting_date", "items"]
