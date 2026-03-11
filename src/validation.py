@@ -28,7 +28,7 @@ _PAN_RE = re.compile(r"^[A-Z]{5}\d{4}[A-Z]$")
 _IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
 
 # International formats
-_EU_VAT_RE = re.compile(r"^[A-Z]{2}\d{2,13}$")  # EU VAT: 2-letter country + digits
+_EU_VAT_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,13}$")  # EU VAT: 2-letter country + alphanumeric
 _IBAN_RE = re.compile(r"^[A-Z]{2}\d{2}[A-Z0-9]{4,30}$")
 _SWIFT_RE = re.compile(r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$")
 
@@ -143,7 +143,8 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                    "supplier_bank.ifsc_code is valid format",
                    f"supplier_bank.ifsc_code invalid: '{bank.ifsc_code}' (expected like HDFC0001234)")
         if bank.swift_code:
-            _check(v, bool(_SWIFT_RE.match(bank.swift_code.strip().upper())),
+            swift = bank.swift_code.replace(" ", "").strip().upper()
+            _check(v, bool(_SWIFT_RE.match(swift)),
                    "supplier_bank.swift_code is valid format",
                    f"supplier_bank.swift_code invalid: '{bank.swift_code}' (expected 8 or 11 chars like HDFCINBB)")
         if bank.iban:
@@ -185,6 +186,31 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
             else:
                 _check_numeric(v, item.amount, expected, f"{prefix} amount matches qty*rate")
 
+        # net_amount = amount - discount consistency
+        if item.net_amount is not None and item.amount is not None:
+            if item.discount_amount is not None and item.discount_amount > 0:
+                expected_net = item.amount - item.discount_amount
+                _check_numeric(v, item.net_amount, expected_net,
+                               f"{prefix} net_amount matches amount - discount_amount")
+            elif item.discount_percentage is not None and item.discount_percentage > 0:
+                discount = item.amount * item.discount_percentage / 100
+                expected_net = item.amount - discount
+                _check_numeric(v, item.net_amount, expected_net,
+                               f"{prefix} net_amount matches amount - discount%")
+
+        # Item-level tax validation
+        if item.tax_rate is not None:
+            _check(v, 0 < item.tax_rate <= 100,
+                   f"{prefix} tax_rate in valid range",
+                   f"{prefix} tax_rate looks wrong: {item.tax_rate}%")
+        if item.tax_amount is not None:
+            _check_decimal_precision(v, item.tax_amount, f"{prefix} tax_amount")
+            if item.tax_rate is not None and item.tax_rate > 0:
+                taxable = item.net_amount if item.net_amount is not None else (item.amount if item.amount is not None else item.qty * item.rate)
+                expected_tax = taxable * item.tax_rate / 100
+                _check_numeric(v, item.tax_amount, expected_tax,
+                               f"{prefix} tax_amount matches taxable * tax_rate")
+
         # Discount consistency
         if item.discount_percentage is not None:
             _check(v, 0 <= item.discount_percentage <= 100,
@@ -205,26 +231,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                     f"{prefix} item_name is purely numeric: '{item.item_name}' — "
                     f"possible column misalignment")
 
-    # ── 8. Duplicate line items detection ───────────────────────────
-    if len(invoice.items) > 1:
-        item_signatures = [
-            (item.item_name, item.qty, item.rate) for item in invoice.items
-        ]
-        sig_counts = Counter(item_signatures)
-        for sig, count in sig_counts.items():
-            if count > 1:
-                v.warnings.append(
-                    f"duplicate line item detected: '{sig[0]}' (qty={sig[1]}, rate={sig[2]}) "
-                    f"appears {count} times — verify not a hallucination")
-
-        if len(invoice.items) >= 3:
-            amounts = [item.amount for item in invoice.items if item.amount is not None]
-            if amounts and len(set(amounts)) == 1 and len(amounts) >= 3:
-                v.warnings.append(
-                    f"all {len(amounts)} items have identical amount ({amounts[0]}) "
-                    f"— possible hallucination")
-
-    # ── 9. Total vs line items ──────────────────────────────────────
+    # ── 8. Total vs line items ───────────────────────────────────────
     items_sum = sum(
         (item.amount if item.amount is not None else item.qty * item.rate)
         for item in invoice.items
@@ -340,7 +347,7 @@ def _validate_tax_ids(v: ValidationResult, ids: TaxIdentifiers | None, party: st
 
     # EU/UK VAT ID
     if ids.vat_id:
-        vat = ids.vat_id.replace(" ", "").upper()
+        vat = ids.vat_id.replace(" ", "").replace(".", "").replace("-", "").upper()
         _check(v, bool(_EU_VAT_RE.match(vat)) and len(vat) >= 4,
                f"{party} VAT ID is valid format",
                f"{party} VAT ID invalid: '{ids.vat_id}' (expected like GB123456789 or DE123456789)")

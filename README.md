@@ -1,6 +1,6 @@
 # Invoice Extractor
 
-A multi-provider AI vision benchmarking tool that extracts structured purchase invoice data from PDFs and images into ERPNext-ready JSON. Compare extraction quality, speed, and cost across Anthropic, OpenAI, and Google models — no OCR setup needed.
+A multi-provider AI vision benchmarking tool that extracts structured purchase invoice data from PDFs and images into ERPNext-ready JSON with per-field confidence scores. Compare extraction quality, speed, and cost across Anthropic, OpenAI, and Google models — no OCR setup needed.
 
 ---
 
@@ -9,27 +9,81 @@ A multi-provider AI vision benchmarking tool that extracts structured purchase i
 1. **Reads** invoice files (PDF, PNG, JPG, WebP) from an `input/` folder
 2. **Sends** each page as an image to an AI vision model with a structured extraction prompt
 3. **Parses** the AI response into a validated Pydantic model (ERPNext Purchase Invoice schema)
-4. **Validates** the extraction against 14 quality checks catching common AI hallucinations
-5. **Writes** ERPNext-ready JSON to `output/`
-6. **Logs** benchmark metrics (latency, tokens, cost, quality score) to `logs/benchmark.csv`
-7. **Prints** a run summary with aggregated stats
+4. **Scores** every extracted field with a confidence score (0-100) based on visual clarity
+5. **Validates** the extraction against quality checks catching common AI hallucinations
+6. **Writes** JSON to `output/` with per-field `{"value": X, "confidence_score": Y}` format
+7. **Logs** benchmark metrics (latency, tokens, cost, quality, confidence) to `logs/benchmark.csv`
+8. **Prints** a run summary with per-file breakdown table
 
 ---
 
-## Prerequisites
+## Quick Start
+
+### Prerequisites
 
 - Python 3.10+
-- An API key from at least one supported provider
+- An API key from at least one provider ([Anthropic](https://console.anthropic.com/settings/keys) | [OpenAI](https://platform.openai.com/api-keys) | [Google](https://aistudio.google.com/apikey))
+
+### 1. Clone & setup environment
+
+```bash
+cd "Claude Trails/invoice-extractor"
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate         # Windows
+```
+
+### 2. Install all dependencies (one command)
+
+```bash
+# Core + all provider SDKs
+pip install ".[all]"
+```
+
+Or install only the provider you need:
+
+```bash
+pip install ".[anthropic]"       # Anthropic only
+pip install ".[openai]"          # OpenAI only
+pip install ".[google]"          # Google only
+```
+
+This installs everything defined in `pyproject.toml` — PyMuPDF, Pydantic, Pillow, python-dotenv, and your chosen provider SDK.
+
+### 3. Configure your API key
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+AI_PROVIDER=anthropic
+AI_MODEL=claude-sonnet-4-6
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
+```
+
+### 4. Run
+
+```bash
+# Drop invoices into input/ folder, then:
+python -m src.main
+```
+
+That's it. JSON output appears in `output/`, metrics in `logs/benchmark.csv`.
 
 ---
 
 ## Supported Providers & Models
 
-| Provider  | Recommended                              | Also Supported                                              | Get API Key                                                                  |
-| --------- | ---------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Anthropic | `claude-sonnet-4-6`, `claude-opus-4-6`   | `claude-haiku-4-5`                                          | [console.anthropic.com](https://console.anthropic.com/settings/keys)         |
-| OpenAI    | `gpt-5.4`, `gpt-5`                      | `gpt-5.2`, `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`            | [platform.openai.com](https://platform.openai.com/api-keys)                 |
-| Google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` | [aistudio.google.com](https://aistudio.google.com/apikey)                   |
+| Provider  | Recommended                              | Also Supported                                              |
+| --------- | ---------------------------------------- | ----------------------------------------------------------- |
+| Anthropic | `claude-sonnet-4-6`, `claude-opus-4-6`   | `claude-haiku-4-5`                                          |
+| OpenAI    | `gpt-5.4`, `gpt-5`                      | `gpt-5.2`, `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`            |
+| Google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
 
 ### Cost Estimates (per 1M tokens)
 
@@ -47,84 +101,35 @@ A multi-provider AI vision benchmarking tool that extracts structured purchase i
 
 ---
 
-## Setup
-
-```bash
-# 1. Navigate to the project
-cd "Claude Trails/invoice-extractor"
-
-# 2. Activate the shared virtual environment
-source ../.venv/bin/activate
-
-# 3. Install core dependencies
-pip install PyMuPDF pydantic python-dotenv
-
-# 4. Install the SDK for your provider
-pip install anthropic          # For Anthropic
-pip install openai             # For OpenAI
-pip install google-genai       # For Google
-
-# 5. Create your .env file
-cp .env.example .env
-```
-
-Edit `.env` to configure your provider and API key:
-
-```env
-# Choose provider: anthropic | openai | google
-AI_PROVIDER=anthropic
-
-# Choose model
-AI_MODEL=claude-sonnet-4-6
-
-# Set the API key for your provider
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
-OPENAI_API_KEY=
-GOOGLE_API_KEY=
-```
-
----
-
 ## Usage
 
-### 1. Add your invoices
-
-Place invoice files into the `input/` folder.
-
-**Supported formats:** PDF, PNG, JPG, JPEG, WebP
-
-### 2. Run the extractor
+### Add invoices & run
 
 ```bash
-cd "Claude Trails/invoice-extractor"
-source ../.venv/bin/activate
+# Place files in input/
+cp ~/invoices/*.pdf input/
+
+# Run with default provider from .env
 python -m src.main
-```
 
-### 3. Collect your JSON
+# Or override provider/model inline
+AI_PROVIDER=openai AI_MODEL=gpt-5.4 python -m src.main
 
-Each invoice produces a corresponding JSON file in `output/`:
-
-```
-input/invoice-001.pdf  ->  output/invoice-001.json
-input/receipt.png      ->  output/receipt.json
-```
-
-### Custom input/output folders
-
-```bash
+# Custom input/output folders
 python -m src.main /path/to/invoices /path/to/output
 ```
 
-### Sample output
+**Supported formats:** PDF, PNG, JPG, JPEG, WebP
+
+### Sample terminal output
 
 ```
 Provider: anthropic | Model: claude-sonnet-4-6
 Found 3 file(s) in input
 
-[1/3] Processing: invoice-001.pdf... OK -> invoice-001.json (2.34s, 1847 tokens, $0.0082, quality 92%)
+[1/3] Processing: invoice-001.pdf... OK -> invoice-001.json (2.3s, 4821 tokens, $0.0082, quality 92%, confidence 94%)
     ~ total matches sum of line items: got 4500.0, expected 4520.00 (diff 0.4%)
-[2/3] Processing: receipt.png... OK -> receipt.json (1.89s, 1203 tokens, $0.0054, quality 100%)
+[2/3] Processing: receipt.png... OK -> receipt.json (1.9s, 3203 tokens, $0.0054, quality 100%, confidence 97%)
 [3/3] Processing: invoice-002.pdf... FAILED: No API key set for provider 'anthropic'
 
 ============================================================
@@ -138,81 +143,118 @@ Estimated cost: $0.0136
 Avg items extracted: 3.5
 Avg field fill rate: 82% (9/11)
 Avg validation score: 96%
+Avg confidence score: 95%
+
+File                           Status   Time    Tokens     Cost  Quality  Conf
+--------------------------------------------------------------------------------
+invoice-001.pdf                OK        2.3s    4,821  $ 0.0082    92%   94%
+receipt.png                    OK        1.9s    3,203  $ 0.0054   100%   97%
+invoice-002.pdf                FAIL        -        -        -       -     -
+  -> No API key set for provider 'anthropic'
+
 Log: logs/benchmark.csv
 ============================================================
 ```
 
 ---
 
-## Output JSON Schema
+## Output Format
 
-Each JSON file follows the **ERPNext v15+ Purchase Invoice** schema:
+Every field in the output JSON includes a confidence score based on visual clarity of the text on the invoice:
 
 ```json
 {
-  "doctype": "Purchase Invoice",
-  "naming_series": "ACC-PINV-.YYYY.-",
-  "supplier": "ABC Suppliers Ltd",
-  "supplier_name": "ABC Suppliers",
-  "posting_date": "2026-03-10",
-  "due_date": "2026-04-10",
-  "bill_no": "INV-2026-0042",
-  "bill_date": "2026-03-08",
-  "currency": "INR",
+  "supplier": {"value": "ABC Suppliers Ltd", "confidence_score": 98},
+  "posting_date": {"value": "2026-03-10", "confidence_score": 95},
+  "currency": {"value": "INR", "confidence_score": 97},
   "items": [
     {
-      "item_name": "Widget A",
-      "description": "Standard Widget Type A",
-      "qty": 10,
-      "uom": "Nos",
-      "rate": 250.00,
-      "amount": 2250.00,
-      "discount_percentage": 10.0,
-      "discount_amount": 250.00
+      "item_name": {"value": "Widget A", "confidence_score": 96},
+      "qty": {"value": 10, "confidence_score": 98},
+      "rate": {"value": 250.00, "confidence_score": 95},
+      "amount": {"value": 2500.00, "confidence_score": 94},
+      "discount_percentage": {"value": 10.0, "confidence_score": 90},
+      "discount_amount": {"value": 250.00, "confidence_score": 90},
+      "net_amount": {"value": 2250.00, "confidence_score": 88},
+      "tax_rate": {"value": 18.0, "confidence_score": 92},
+      "tax_amount": {"value": 405.00, "confidence_score": 91},
+      "batch_no": {"value": "LOT-2026-001", "confidence_score": 85},
+      "hsn_sac": {"value": "8479", "confidence_score": 93}
     }
   ],
   "taxes": [
     {
-      "charge_type": "On Net Total",
-      "description": "CGST 9%",
-      "rate": 9.0,
-      "tax_amount": 202.50
-    },
-    {
-      "charge_type": "On Net Total",
-      "description": "SGST 9%",
-      "rate": 9.0,
-      "tax_amount": 202.50
+      "description": {"value": "CGST 9%", "confidence_score": 97},
+      "rate": {"value": 9.0, "confidence_score": 96},
+      "tax_amount": {"value": 202.50, "confidence_score": 94}
     }
   ],
-  "total": 2250.00,
-  "discount_amount": 250.00,
-  "grand_total": 2655.00,
-  "remarks": "Payment terms: Net 30",
-  "docstatus": 0
+  "total": {"value": 2250.00, "confidence_score": 96},
+  "grand_total": {"value": 2655.00, "confidence_score": 97},
+  "supplier_address": {
+    "address_line1": {"value": "123 Industrial Area", "confidence_score": 92},
+    "city": {"value": "Mumbai", "confidence_score": 98},
+    "state": {"value": "Maharashtra", "confidence_score": 95},
+    "country": {"value": "India", "confidence_score": 99}
+  }
 }
 ```
 
-**Note:** All invoices are created as **Draft** (`docstatus: 0`). Review them before submitting in ERPNext.
+### Confidence Score Scale
+
+| Score   | Meaning                                                              |
+| ------- | -------------------------------------------------------------------- |
+| 95-100  | Crystal clear, high resolution, unambiguous                          |
+| 80-94   | Readable but minor issues (slight blur, small font)                  |
+| 60-79   | Partially obscured, low contrast, ambiguous characters (0/O, 1/l)   |
+| 40-59   | Significantly blurred, cut off, requires inference                   |
+| 1-39    | Barely legible, heavily occluded, mostly guessed                     |
+| 0       | Field not found in the document                                      |
+
+Scores are based on **visual clarity** of the source text, not logical correctness.
 
 ### Schema Fields
 
-| Field               | Type       | Required | Description                                    |
-| ------------------- | ---------- | -------- | ---------------------------------------------- |
-| `supplier`          | string     | Yes      | Official supplier/company name                 |
-| `supplier_name`     | string     | No       | Display name if different                      |
-| `posting_date`      | string     | Yes      | Invoice date (YYYY-MM-DD)                      |
-| `due_date`          | string     | No       | Payment due date                               |
-| `bill_no`           | string     | No       | Supplier's invoice number                      |
-| `bill_date`         | string     | No       | Supplier's invoice date                        |
-| `currency`          | string     | No       | ISO 4217 code (INR, USD, EUR). Default: INR    |
-| `items`             | array      | Yes      | Line items (see below)                         |
-| `taxes`             | array      | No       | Tax/charge entries                             |
-| `total`             | number     | No       | Net total before tax                           |
-| `discount_amount`   | number     | No       | Invoice-level discount                         |
-| `grand_total`       | number     | No       | Final amount including tax                     |
+| Field                 | Type       | Required | Description                                    |
+| --------------------- | ---------- | -------- | ---------------------------------------------- |
+| `supplier`            | string     | Yes      | Official supplier/company name                 |
+| `supplier_name`       | string     | No       | Display name if different                      |
+| `supplier_tax_ids`    | object     | No       | GSTIN, PAN, VAT ID, generic tax ID             |
+| `supplier_address`    | object     | No       | Structured address (line1, city, state, etc.)  |
+| `supplier_bank`       | object     | No       | Bank details (account, IFSC, SWIFT, IBAN)      |
+| `company`             | string     | No       | Buyer/our company name                         |
+| `company_tax_ids`     | object     | No       | Buyer's tax identifiers                        |
+| `billing_address`     | object     | No       | Bill To address                                |
+| `shipping_address`    | object     | No       | Ship To address                                |
+| `posting_date`        | string     | Yes      | Invoice date (YYYY-MM-DD)                      |
+| `due_date`            | string     | No       | Payment due date                               |
+| `bill_no`             | string     | No       | Supplier's invoice number                      |
+| `bill_date`           | string     | No       | Supplier's invoice date                        |
+| `currency`            | string     | No       | ISO 4217 code (INR, USD, EUR). Default: INR    |
+| `items`               | array      | Yes      | Line items (see below)                         |
+| `taxes`               | array      | No       | Tax/charge entries                             |
+| `total`               | number     | No       | Net total before tax                           |
+| `discount_amount`     | number     | No       | Invoice-level discount                         |
+| `grand_total`         | number     | No       | Final amount including tax                     |
 
-**Line Item Fields:** `item_name` (required), `description`, `qty` (required), `uom`, `rate` (required), `amount`, `discount_percentage`, `discount_amount`
+**Line Item Fields:**
+
+| Field                 | Required | Description                                       |
+| --------------------- | -------- | ------------------------------------------------- |
+| `item_name`           | Yes      | Name of the item                                  |
+| `description`         | No       | Item description                                  |
+| `qty`                 | Yes      | Quantity                                          |
+| `uom`                 | No       | Unit of measure (default: Nos)                    |
+| `rate`                | Yes      | Unit price before discount                        |
+| `amount`              | No       | Gross amount (qty * rate)                         |
+| `discount_percentage` | No       | Discount % on this item                           |
+| `discount_amount`     | No       | Discount amount on this item                      |
+| `net_amount`          | No       | Amount after discount (before tax)                |
+| `tax_rate`            | No       | Tax % applicable to this item                     |
+| `tax_amount`          | No       | Tax amount on this item                           |
+| `batch_no`            | No       | Batch or lot number                               |
+| `serial_no`           | No       | Serial number                                     |
+| `hsn_sac`             | No       | HSN/SAC or commodity code                         |
 
 **Tax Fields:** `description` (required), `charge_type`, `rate`, `tax_amount`, `account_head`
 
@@ -247,6 +289,7 @@ Every run appends metrics to `logs/benchmark.csv`. Use this to compare models si
 | `validation_total`    | Total number of checks run                       |
 | `validation_warnings` | Count of quality warnings (soft issues)          |
 | `validation_errors`   | Semicolon-separated list of errors + warnings    |
+| `avg_confidence`      | Average confidence score across all fields (0-100) |
 | `stop_reason`         | API stop reason (`end_turn`, `max_tokens`, etc.) |
 | `error_message`       | Error details if extraction failed               |
 
@@ -271,7 +314,7 @@ All results append to the same `logs/benchmark.csv` for easy comparison in a spr
 
 ## Validation Engine
 
-The validation module (`src/validation.py`) runs **14 quality checks** on every extraction, catching common AI vision failures:
+The validation module runs quality checks on every extraction, catching common AI vision failures:
 
 ### Checks Performed
 
@@ -282,15 +325,16 @@ The validation module (`src/validation.py`) runs **14 quality checks** on every 
 | 3 | Date calendar validity         | Impossible dates like Feb 30, month 13                      | Error   |
 | 4 | Date logical order             | due_date before posting_date                                | Error   |
 | 5 | Currency code validation       | Symbols (₹, $, €) instead of ISO codes (INR, USD, EUR)     | Error   |
-| 6 | Supplier name sanity           | Watermark text (DRAFT/COPY/SAMPLE) leaking into supplier    | Warning |
-| 7 | Line item math                 | `amount != qty * rate - discount` beyond 2% tolerance       | Warning |
-| 8 | Discount consistency           | Discount % out of 0-100 range, discount > gross amount      | Error   |
-| 9 | Duplicate item detection       | Same (name, qty, rate) appearing multiple times              | Warning |
-| 10 | Identical amounts              | All 3+ items having the exact same amount (hallucination)   | Warning |
-| 11 | Total vs items sum             | `total` doesn't match sum of line item amounts              | Warning |
-| 12 | Grand total vs total + taxes   | `grand_total != total - discount + taxes`                   | Error   |
-| 13 | Magnitude sanity               | Grand total is 10x/100x off from items sum (digit misread)  | Warning |
-| 14 | Decimal precision              | >2 decimal places (European separator misparse)             | Warning |
+| 6 | Tax ID format validation       | GSTIN, PAN, EU VAT, SWIFT, IBAN format checks               | Error   |
+| 7 | Supplier name sanity           | Watermark text (DRAFT/COPY/SAMPLE) leaking into supplier    | Warning |
+| 8 | Line item math                 | `amount != qty * rate - discount` beyond 2% tolerance       | Warning |
+| 9 | Net amount consistency         | `net_amount != amount - discount`                           | Warning |
+| 10 | Item tax validation           | `tax_amount != taxable * tax_rate`, tax_rate out of range   | Error   |
+| 11 | Discount consistency           | Discount % out of 0-100 range, discount > gross amount      | Error   |
+| 12 | Total vs items sum             | `total` doesn't match sum of line item amounts              | Warning |
+| 13 | Grand total vs total + taxes   | `grand_total != total - discount + taxes`                   | Error   |
+| 14 | Magnitude sanity               | Grand total is 10x/100x off from items sum (digit misread)  | Warning |
+| 15 | Decimal precision              | >2 decimal places (European separator misparse)             | Warning |
 
 ### Additional Heuristic Warnings
 
@@ -306,49 +350,6 @@ The validation module (`src/validation.py`) runs **14 quality checks** on every 
 - **Warnings** = soft issues logged but don't reduce the score
 - **Score** = `checks_passed / checks_total * 100`
 - A perfect invoice scores **100%**
-
----
-
-## Prompt Engineering
-
-The system prompt (`src/extractor.py`) is heavily engineered for financial document accuracy:
-
-### Key Prompt Sections
-
-| Section                    | Purpose                                                      |
-| -------------------------- | ------------------------------------------------------------ |
-| Objective                  | Define the task: extract structured invoice data for ERP     |
-| Strict Output Rules        | JSON only, no markdown/comments, null for unknown fields     |
-| Data Normalization         | Date format (YYYY-MM-DD), currency stripping, number parsing |
-| Currency Separator Rules   | Indian/US (commas) vs European (dots) format detection       |
-| Field Extraction Guide     | Per-field instructions for supplier, items, taxes, totals    |
-| Discount Handling          | Rate = original price, amount = after discount               |
-| Anti-Hallucination Rules   | Never fabricate, round, transpose, paraphrase, merge/split   |
-| Document Structure Rules   | Ignore watermarks, handle multi-page, preserve item order    |
-| Date Disambiguation        | DD/MM/YYYY for INR/EUR/GBP, MM/DD/YYYY for USD              |
-| Numeric Consistency        | Self-check: items sum ~ total, total + tax ~ grand_total     |
-
-### Structured Output Enforcement
-
-Each provider uses its native JSON schema enforcement:
-
-| Provider  | Method                                            |
-| --------- | ------------------------------------------------- |
-| Anthropic | `output_config.format.json_schema` with schema    |
-| OpenAI    | `text.format.json_schema` with schema             |
-| Google    | `response_mime_type="application/json"` + schema  |
-
-All providers use the same `schema.json` file, ensuring consistent output structure regardless of the model.
-
-### Robust JSON Parsing
-
-The `_parse_json_robust()` function handles malformed AI responses:
-
-1. Strips markdown code fences (```json ... ```)
-2. Tries direct `json.loads()`
-3. Extracts JSON object from surrounding text (`{...}`)
-4. Fixes trailing commas (`,}` or `,]`)
-5. Raises with raw text for debugging if all else fails
 
 ---
 
@@ -369,49 +370,58 @@ To switch providers, update `.env` — no code changes needed.
 
 ---
 
+## Error Handling & Resilience
+
+| Feature                  | Details                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| Rate limit retry         | Auto-retries on 429 errors with 15s / 30s / 60s backoff (up to 3 retries) |
+| Inter-file delay         | 3-second delay between files to avoid hitting rate limits    |
+| Image size limits        | Auto-resizes images >5MB using Pillow before sending to API  |
+| JSON truncation          | Uses 16,384 max output tokens to handle large invoices       |
+| Robust JSON parsing      | Handles markdown fences, trailing commas, surrounding text   |
+
+---
+
 ## Troubleshooting
 
 | Problem                          | Solution                                                    |
 | -------------------------------- | ----------------------------------------------------------- |
-| `ModuleNotFoundError: anthropic` | `pip install anthropic`                                     |
-| `ModuleNotFoundError: openai`    | `pip install openai`                                        |
-| `ModuleNotFoundError: fitz`      | `pip install PyMuPDF`                                       |
+| `ModuleNotFoundError: anthropic` | `pip install ".[anthropic]"`                                |
+| `ModuleNotFoundError: openai`    | `pip install ".[openai]"`                                   |
+| `ModuleNotFoundError: fitz`      | `pip install ".[all]"` (includes PyMuPDF)                   |
 | `No API key set for provider`    | Check `.env` has the correct key for your `AI_PROVIDER`     |
 | `No supported files found`       | Ensure files are in `input/` with supported extensions      |
 | `Schema file not found`          | Ensure `schema.json` exists in project root                 |
 | Poor extraction quality          | Try a stronger model (`claude-opus-4-6`, `gpt-5.4`)        |
-| Rate limit errors                | Built-in 0.5s delay between files; reduce batch size        |
+| Rate limit errors (429)          | Built-in retry with backoff handles this automatically      |
 | `Failed to parse JSON`           | Model returned non-JSON; try a different model              |
 | Low validation score             | Check `validation_errors` in CSV for specific failures      |
+| Image too large error            | Auto-resize handles this; ensure Pillow is installed        |
 
 ---
 
 ## Project Structure
 
 ```
-Claude Trails/                           <- Shared root
-|-- .venv/                               <- Shared Python virtual environment
-|-- .gitignore
+invoice-extractor/
+|-- .env                             <- Provider config & API keys (git-ignored)
+|-- .env.example                     <- Template for .env
+|-- schema.json                      <- ERPNext Purchase Invoice JSON schema
+|-- pyproject.toml                   <- Python package config & dependencies
+|-- README.md                        <- This file
 |
-|-- invoice-extractor/                   <- This project
-|   |-- .env                             <- Provider config & API keys (git-ignored)
-|   |-- .env.example                     <- Template for .env
-|   |-- schema.json                      <- ERPNext Purchase Invoice JSON schema
-|   |-- pyproject.toml                   <- Python package config & dependencies
-|   |-- README.md                        <- This file
-|   |
-|   |-- input/                           <- Drop invoice files here
-|   |-- output/                          <- JSON output files (git-ignored)
-|   |-- logs/                            <- Benchmark CSV logs (git-ignored)
-|   |
-|   |-- src/
-|   |   |-- __init__.py
-|   |   |-- config.py                    <- .env loading, provider/model/key resolution
-|   |   |-- models.py                    <- Pydantic models (PurchaseInvoice schema)
-|   |   |-- extractor.py                 <- AI vision extraction + system prompt
-|   |   |-- validation.py                <- 14-check quality validation engine
-|   |   |-- benchmark.py                 <- Metrics dataclass + CSV logger
-|   |   |-- main.py                      <- CLI entry point, orchestration loop
+|-- input/                           <- Drop invoice files here
+|-- output/                          <- JSON output files (git-ignored)
+|-- logs/                            <- Benchmark CSV logs (git-ignored)
+|
+|-- src/
+|   |-- __init__.py
+|   |-- config.py                    <- .env loading, provider/model/key resolution
+|   |-- models.py                    <- Pydantic models (PurchaseInvoice schema)
+|   |-- extractor.py                 <- AI vision extraction + system prompt
+|   |-- validation.py                <- Quality validation engine
+|   |-- benchmark.py                 <- Metrics dataclass + CSV logger
+|   |-- main.py                      <- CLI entry point, orchestration loop
 ```
 
 ### How the Modules Connect
@@ -422,7 +432,7 @@ main.py
   |-- extractor.py       -> sends images to AI API, gets structured JSON
   |   |-- config.py      -> loads schema.json
   |   |-- models.py      -> validates JSON into PurchaseInvoice Pydantic model
-  |-- validation.py      -> runs 14 quality checks on the PurchaseInvoice
+  |-- validation.py      -> runs quality checks on the PurchaseInvoice
   |-- benchmark.py       -> collects metrics, writes CSV, prints summary
 ```
 
@@ -436,99 +446,12 @@ main.py
 | Image-based extraction         | Works with scanned PDFs, photos, digital PDFs — universal input  |
 | PyMuPDF for PDF rendering      | Fast, no external dependencies (Poppler/Tesseract not needed)    |
 | 200 DPI rendering              | Balance between quality and token cost                           |
+| Pillow for image resize        | Auto-downscale large images to stay within API size limits       |
 | Pydantic v2 models             | Runtime validation, type safety, easy JSON serialization         |
 | Shared JSON schema             | Same schema.json across all providers for fair comparison        |
 | Provider-native JSON mode      | Each provider's structured output for best results               |
+| Per-field confidence scores    | Know which extracted values to trust vs review manually          |
 | Robust JSON parser             | Handles markdown fences, trailing commas, surrounding text       |
-| 14-check validation            | Catches hallucinations, math errors, separator misparses         |
+| Rate-limit retry with backoff  | Handles 429 errors automatically (15s/30s/60s)                   |
 | CSV benchmark logging          | Append-only, easy to analyze in spreadsheet or pandas            |
 | .env configuration             | Switch providers without code changes                            |
-| 0.5s inter-file delay          | Simple rate limiting without complexity                          |
-
----
-
-## AI Prompt for Recreating This Project
-
-Use the following prompt with any AI coding assistant to build a similar invoice extraction + benchmarking tool:
-
----
-
-> **Project: AI Vision Invoice Extractor with Multi-Provider Benchmarking**
->
-> Build a Python CLI tool that extracts structured purchase invoice data from PDF and image files using AI vision APIs, validates the results, and benchmarks performance across multiple AI providers.
->
-> ### Core Requirements
->
-> 1. **Multi-provider support**: Support at least 3 AI vision providers (e.g., Anthropic Claude, OpenAI GPT, Google Gemini). Each provider should use its native structured output / JSON schema enforcement. Provider selection via environment variable — no code changes to switch.
->
-> 2. **Input handling**: Accept PDF and image files (PNG, JPG, WebP). For PDFs, render each page to a PNG image at 200 DPI using PyMuPDF. Send all pages as a multi-image request to the AI API.
->
-> 3. **Output schema**: Define a Pydantic v2 model for a Purchase Invoice with these fields:
->    - Supplier info: `supplier`, `supplier_name`
->    - Dates: `posting_date`, `due_date`, `bill_no`, `bill_date` (all YYYY-MM-DD)
->    - Currency: ISO 4217 3-letter code (INR, USD, EUR — not symbols like ₹/$)
->    - Line items array: `item_name`, `description`, `qty`, `uom`, `rate`, `amount`, `discount_percentage`, `discount_amount`
->    - Taxes array: `description`, `charge_type`, `rate`, `tax_amount`
->    - Totals: `total` (before tax), `discount_amount`, `grand_total` (after tax)
->    - Also export as a JSON schema file that all providers can reference
->
-> 4. **System prompt engineering**: Write a detailed extraction prompt covering:
->    - Strict JSON-only output rules
->    - Data normalization: dates to YYYY-MM-DD, strip currency symbols from numbers, handle Indian/US comma separators vs European dot separators
->    - Discount handling: rate = original price, amount = after discount
->    - Anti-hallucination rules: never fabricate values, never round numbers, never transpose digits, never paraphrase item names, never merge/split line items, verify math
->    - Document structure: ignore watermarks/stamps, handle multi-page, preserve item order
->    - Date disambiguation: DD/MM/YYYY default for INR/EUR/GBP, MM/DD/YYYY for USD
->    - Numeric self-checks: sum of items ~ total, total + taxes ~ grand_total
->
-> 5. **Robust JSON parsing**: Handle common AI response issues:
->    - Markdown code fence wrapping (```json...```)
->    - Leading/trailing non-JSON text
->    - Trailing commas in objects/arrays
->    - Raise clear errors with raw text snippet for debugging
->
-> 6. **Validation engine** (14 checks): After extraction, validate against these common AI vision failures:
->    - Required fields present (supplier, date, items)
->    - Date format YYYY-MM-DD + real calendar date (catch Feb 30, month 13)
->    - Date logical order (due_date >= posting_date)
->    - Currency is ISO code not symbol (₹ → error, INR → pass)
->    - Supplier name not contaminated with watermark text (DRAFT/COPY/SAMPLE)
->    - Line item math: amount = qty * rate - discount (within 2% tolerance)
->    - Discount ranges valid (0-100% for percentage, not exceeding gross)
->    - Duplicate item detection (same name+qty+rate repeated = possible hallucination)
->    - All items having identical amounts (3+ items = suspicious)
->    - Total matches sum of line items
->    - Grand total = total - discount + taxes
->    - Magnitude sanity (grand_total not 10x/100x off from items — digit misread)
->    - Decimal precision (>2 decimals = currency separator misparse)
->    - Additional warnings: control characters (OCR garbage), numeric item names (column misalignment), very long bill numbers (field leak), negative totals
->    - Score = checks_passed / checks_total as percentage
->
-> 7. **Benchmark metrics**: For every extraction, log to a CSV file:
->    - Timestamp, file name, provider, model, status (success/error)
->    - Latency (seconds), input/output/total tokens, estimated cost (USD)
->    - Quality: items count, taxes count, has_grand_total, has_supplier, fields_populated/total
->    - Validation: score %, checks passed/total, warning count, error details
->    - Stop reason, error message
->    - Include a pricing table for cost estimation per model
->    - Print a run summary with aggregated stats at the end
->
-> 8. **CLI entry point**:
->    - Scan `input/` folder for supported files
->    - Process each file sequentially with progress output
->    - Write JSON to `output/` folder (one JSON per input file)
->    - Append metrics to `logs/benchmark.csv`
->    - Print per-file status with validation errors/warnings
->    - 0.5s delay between files for rate limiting
->    - Support custom input/output paths via CLI args
->
-> 9. **Configuration**: All config via `.env` file — provider, model, API keys, schema path. Include `.env.example` template.
->
-> 10. **Dependencies**: PyMuPDF (PDF rendering), Pydantic v2 (schema validation), python-dotenv (config). Provider SDKs as optional dependencies.
->
-> ### Tech Stack
-> - Python 3.10+, Pydantic v2, PyMuPDF, python-dotenv
-> - Provider SDKs: anthropic, openai, google-genai
-> - No OCR libraries needed — pure AI vision extraction
-
----

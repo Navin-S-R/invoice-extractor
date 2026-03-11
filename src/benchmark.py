@@ -40,6 +40,9 @@ class ExtractionMetrics:
     validation_warnings: int = 0
     validation_errors: str = ""
 
+    # Confidence score (avg across all fields, 0-100)
+    avg_confidence: int = 0
+
     # Raw stop reason from the API
     stop_reason: str = ""
 
@@ -93,6 +96,7 @@ class BenchmarkLogger:
         "has_grand_total", "has_supplier", "fields_populated", "fields_total",
         "validation_score", "validation_passed", "validation_total",
         "validation_warnings", "validation_errors",
+        "avg_confidence",
         "stop_reason", "error_message",
     ]
 
@@ -145,11 +149,36 @@ class BenchmarkLogger:
             fill_rate = (avg_fields / avg_total_fields * 100) if avg_total_fields else 0
             avg_validation = sum(m.validation_score for m in succeeded) / len(succeeded)
             total_warnings = sum(m.validation_warnings for m in succeeded)
+            conf_scores = [m.avg_confidence for m in succeeded if m.avg_confidence > 0]
+            avg_conf = sum(conf_scores) / len(conf_scores) if conf_scores else 0
+
             print(f"Avg items extracted: {avg_items:.1f}")
             print(f"Avg field fill rate: {fill_rate:.0f}% ({avg_fields:.0f}/{avg_total_fields:.0f})")
             print(f"Avg validation score: {avg_validation:.0f}%")
+            if avg_conf > 0:
+                print(f"Avg confidence score: {avg_conf:.0f}%")
             if total_warnings > 0:
                 print(f"Total warnings: {total_warnings} (check logs for details)")
 
-        print(f"Log: {self.log_path}")
+        # Per-file breakdown table
+        print(f"\n{'File':<30} {'Status':<8} {'Time':>6} {'Tokens':>8} {'Cost':>8} {'Quality':>7} {'Conf':>5}")
+        print("-" * 80)
+        for m in all_metrics:
+            if m.status == "success":
+                print(
+                    f"{m.file_name:<30} {'OK':<8} {m.latency_seconds:>5.1f}s "
+                    f"{m.total_tokens:>8,} ${m.estimated_cost_usd:>7.4f} "
+                    f"{m.validation_score:>5}%  {m.avg_confidence or '-':>4}%"
+                )
+            else:
+                err_short = m.error_message[:40] if m.error_message else "unknown"
+                print(f"{m.file_name:<30} {'FAIL':<8} {'-':>6} {'-':>8} {'-':>8} {'-':>7} {'-':>5}")
+                print(f"  -> {err_short}")
+
+        if failed:
+            print(f"\nFailed files ({len(failed)}):")
+            for m in failed:
+                print(f"  - {m.file_name}: {m.error_message}")
+
+        print(f"\nLog: {self.log_path}")
         print("=" * 60)

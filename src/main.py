@@ -37,6 +37,77 @@ def _count_populated_fields(invoice) -> tuple[int, int]:
     return populated, total
 
 
+def _avg_confidence(scores: dict | list | None) -> int | None:
+    """Compute average confidence score from a nested confidence_scores structure."""
+    if scores is None:
+        return None
+    values: list[int] = []
+
+    def _collect(obj):
+        if isinstance(obj, dict):
+            for v in obj.values():
+                _collect(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _collect(item)
+        elif isinstance(obj, (int, float)):
+            values.append(int(obj))
+
+    _collect(scores)
+    return round(sum(values) / len(values)) if values else None
+
+
+def _merge_with_confidence(data: dict, scores: dict | None) -> dict:
+    """Merge invoice data and confidence scores into per-field format.
+
+    Transforms:
+      data:   {"total": 100, "supplier": "Acme"}
+      scores: {"total": 97,  "supplier": 98}
+    Into:
+      {"total": {"value": 100, "confidence_score": 97},
+       "supplier": {"value": "Acme", "confidence_score": 98}}
+
+    Handles nested dicts, arrays of dicts, and leaf values.
+    Falls back to confidence_score=0 when scores are missing.
+    """
+    if scores is None:
+        scores = {}
+
+    def _merge(d, s):
+        if isinstance(d, dict) and isinstance(s, dict):
+            result = {}
+            for key, val in d.items():
+                score_val = s.get(key)
+                if isinstance(val, dict) and isinstance(score_val, dict):
+                    # Nested object (address, tax_ids, bank) — recurse
+                    result[key] = _merge(val, score_val)
+                elif isinstance(val, list):
+                    # Array (items, taxes) — merge element-wise
+                    score_list = score_val if isinstance(score_val, list) else []
+                    merged_list = []
+                    for idx, item in enumerate(val):
+                        item_score = score_list[idx] if idx < len(score_list) else {}
+                        if isinstance(item, dict) and isinstance(item_score, dict):
+                            merged_list.append(_merge(item, item_score))
+                        else:
+                            merged_list.append({
+                                "value": item,
+                                "confidence_score": item_score if isinstance(item_score, (int, float)) else 0,
+                            })
+                    result[key] = merged_list
+                else:
+                    # Leaf value
+                    result[key] = {
+                        "value": val,
+                        "confidence_score": score_val if isinstance(score_val, (int, float)) else 0,
+                    }
+            return result
+        # Fallback: data without matching scores
+        return {"value": d, "confidence_score": s if isinstance(s, (int, float)) else 0}
+
+    return _merge(data, scores)
+
+
 def main():
     base_dir = Path(__file__).resolve().parent.parent
     input_dir = base_dir / "input"
@@ -83,10 +154,13 @@ def main():
         try:
             invoice, result = extract_invoice(file_path, provider, model, api_key)
 
-            # Write JSON output
+            # Write JSON output with per-field confidence scores
+            invoice_data = invoice.model_dump(exclude_none=True)
+            output_data = _merge_with_confidence(invoice_data, result.confidence_scores)
+
             output_file = output_dir / f"{file_path.stem}.json"
             output_file.write_text(
-                json.dumps(invoice.model_dump(exclude_none=True), indent=2, ensure_ascii=False)
+                json.dumps(output_data, indent=2, ensure_ascii=False)
             )
 
             # Fill metrics from API response
@@ -115,10 +189,16 @@ def main():
             metrics.validation_warnings = len(vr.warnings)
             metrics.validation_errors = "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
 
+            # Compute average confidence from scores
+            avg_confidence = _avg_confidence(result.confidence_scores) if result.confidence_scores else None
+            if avg_confidence is not None:
+                metrics.avg_confidence = avg_confidence
+            conf_str = f", confidence {avg_confidence}%" if avg_confidence is not None else ""
+
             print(
                 f"OK -> {output_file.name} "
                 f"({metrics.latency_seconds}s, {metrics.total_tokens} tokens, "
-                f"${metrics.estimated_cost_usd:.4f}, quality {vr.score_pct}%)"
+                f"${metrics.estimated_cost_usd:.4f}, quality {vr.score_pct}%{conf_str})"
             )
             if vr.errors:
                 for err in vr.errors:
@@ -135,9 +215,9 @@ def main():
         logger.log(metrics)
         all_metrics.append(metrics)
 
-        # Small delay to stay within rate limits
+        # Delay between files to avoid rate limits
         if i < len(files):
-            time.sleep(0.5)
+            time.sleep(3)
 
     logger.print_summary(all_metrics)
 

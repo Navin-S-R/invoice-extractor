@@ -16,6 +16,7 @@ from .models import PurchaseInvoice
 class ExtractionResult:
     """Raw extraction output with API response metadata."""
     data: dict
+    confidence_scores: dict | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     stop_reason: str = ""
@@ -30,10 +31,12 @@ OBJECTIVE
 Extract structured invoice data including supplier details, invoice metadata, line items, taxes, and totals.
 
 STRICT OUTPUT RULES
-- Return ONLY a valid JSON object.
+- Return ONLY a valid JSON object with two top-level keys: "data" and "confidence_scores".
+- "data": the extracted invoice data conforming to the provided JSON schema.
+- "confidence_scores": a parallel structure mirroring "data" where every leaf value is replaced by an integer 0-100 representing your confidence in that extracted value based on visual clarity.
 - Do NOT include markdown, comments, explanations, or additional text.
-- The output must strictly conform to the provided JSON schema.
-- If a field cannot be determined from the document, return null.
+- The "data" object must strictly conform to the provided JSON schema.
+- If a field cannot be determined from the document, return null in "data" and 0 in "confidence_scores".
 - Do not invent values.
 
 DATA NORMALIZATION RULES
@@ -100,15 +103,21 @@ For each product/service row extract:
 - description
 - qty
 - uom
-- rate
-- amount (after discount if applicable)
+- rate (original unit price BEFORE discount)
+- amount: qty * rate (gross amount before discount)
 - discount_percentage (if a percentage discount is shown on the line)
 - discount_amount (if a fixed discount amount is shown on the line)
+- net_amount: amount after discount (amount - discount). If no discount, net_amount = amount.
+- tax_rate: tax percentage applicable to this item (e.g. GST %, VAT %, Sales Tax %)
+- tax_amount: tax amount on this item
+- batch_no: batch number or lot number if shown on the line item
+- serial_no: serial number if shown on the line item
 - hsn_sac: HSN/SAC code (India), HS code, commodity code, or tariff code if shown
 
 If a line item has a discount:
 - rate should be the ORIGINAL unit price before discount
-- amount should be the FINAL amount after discount: (qty * rate) - discount
+- amount = qty * rate (gross, before discount)
+- net_amount = amount - discount (final amount after discount, before tax)
 - If only discounted price is shown, use that as rate and leave discount fields null
 
 If UOM is not present use:
@@ -172,12 +181,47 @@ NUMERIC CONSISTENCY
 - Ensure: total + taxes ≈ grand_total.
 - If extracted numbers don't add up, re-read the document carefully before submitting.
 - If a value looks suspiciously round (e.g., exactly 1000.00 when items suggest 987.50), verify it.
+
+CONFIDENCE SCORING RULES
+For every leaf value in "data", provide a corresponding integer score (0-100) in "confidence_scores":
+- 95-100: Text is crystal clear, high resolution, unambiguous. You are certain of the value.
+- 80-94: Text is readable but minor issues (slight blur, small font, partial overlap). High confidence.
+- 60-79: Text is partially obscured, low contrast, or ambiguous characters (0/O, 1/l/I, 5/S). Moderate confidence.
+- 40-59: Text is significantly blurred, cut off, or requires inference from context. Low confidence.
+- 1-39: Text is barely legible, heavily occluded, or mostly guessed from surrounding context. Very low confidence.
+- 0: Field not found in the document (value is null or default).
+
+Score based on VISUAL CLARITY of the source text on the invoice image, not on logical correctness.
+- A perfectly legible but logically wrong number should still get 95+ (it's clearly printed).
+- A blurry number that you can barely read should get 40-60 even if it makes logical sense.
+- Calculated fields (e.g., amount = qty * rate) should reflect the confidence of the inputs used.
+- For nested objects (addresses, tax_ids, bank), score each leaf field independently.
+- For arrays (items, taxes), provide an array of objects with scores for each element.
+
+OUTPUT FORMAT EXAMPLE:
+{
+  "data": {
+    "supplier": "Acme Corp",
+    "posting_date": "2024-01-15",
+    "total": 1000.00,
+    "items": [{"item_name": "Widget", "qty": 10, "rate": 100.0, "amount": 1000.0}]
+  },
+  "confidence_scores": {
+    "supplier": 98,
+    "posting_date": 95,
+    "total": 90,
+    "items": [{"item_name": 97, "qty": 85, "rate": 92, "amount": 88}]
+  }
+}
 """
 
 USER_PROMPT = """
 Extract all invoice data from the provided document image.
 
-Return the result as a JSON object that strictly follows the provided ERPNext Purchase Invoice schema.
+Return a JSON object with two keys:
+1. "data": the extracted invoice data conforming to the provided schema.
+2. "confidence_scores": a parallel structure where each leaf value is an integer 0-100 representing visual clarity confidence.
+
 Ensure the output contains only valid JSON.
 """
 
@@ -374,7 +418,7 @@ def _extract_anthropic(file_path: Path, model: str, api_key: str, schema: dict) 
     start = time.perf_counter()
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=16384,
         system=system_with_schema,
         messages=[{"role": "user", "content": content}],
     )
@@ -484,6 +528,10 @@ _PROVIDERS = {
 }
 
 
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [15, 30, 60]  # seconds to wait on rate-limit (429) errors
+
+
 def extract_invoice(
     file_path: Path,
     provider: str,
@@ -494,16 +542,40 @@ def extract_invoice(
 
     Returns (invoice, extraction_result) where extraction_result contains
     API response metrics (tokens, latency, stop reason).
+    Retries automatically on rate-limit (429) errors with exponential backoff.
     """
     extract_fn = _PROVIDERS.get(provider)
     if not extract_fn:
         raise ValueError(f"Unsupported provider: '{provider}'. Choose from: {', '.join(_PROVIDERS)}")
 
     schema = get_schema()
-    result = extract_fn(file_path, model, api_key, schema)
-    _coerce_nulls(result.data, schema)
-    invoice = PurchaseInvoice(**result.data)
-    return invoice, result
+
+    last_err = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = extract_fn(file_path, model, api_key, schema)
+
+            # Split envelope: model returns {"data": {...}, "confidence_scores": {...}}
+            raw = result.data
+            if "data" in raw and isinstance(raw["data"], dict):
+                result.data = raw["data"]
+                result.confidence_scores = raw.get("confidence_scores")
+            # Fallback: model returned flat invoice data (no envelope)
+
+            _coerce_nulls(result.data, schema)
+            invoice = PurchaseInvoice(**result.data)
+            return invoice, result
+        except Exception as e:
+            err_str = str(e).lower()
+            is_rate_limit = "429" in err_str or "rate" in err_str or "overloaded" in err_str
+            if is_rate_limit and attempt < _MAX_RETRIES:
+                wait = _RETRY_BACKOFF[attempt]
+                print(f"\n    Rate limited, retrying in {wait}s (attempt {attempt + 2}/{_MAX_RETRIES + 1})...", end=" ", flush=True)
+                time.sleep(wait)
+                last_err = e
+            else:
+                raise
+    raise last_err  # type: ignore[misc]
 
 
 def _coerce_nulls(data: dict, schema: dict):

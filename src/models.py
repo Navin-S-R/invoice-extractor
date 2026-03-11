@@ -46,9 +46,14 @@ class PurchaseInvoiceItem(BaseModel):
     qty: float = Field(..., description="Quantity")
     uom: str = Field(default="Nos", description="Unit of measure")
     rate: float = Field(..., description="Rate per unit")
-    amount: Optional[float] = Field(None, description="qty * rate, auto-calculated if omitted")
+    amount: Optional[float] = Field(None, description="qty * rate (gross amount before discount)")
     discount_percentage: Optional[float] = Field(None, description="Discount percentage on this item")
     discount_amount: Optional[float] = Field(None, description="Discount amount on this item")
+    net_amount: Optional[float] = Field(None, description="Amount after discount (amount - discount_amount)")
+    tax_rate: Optional[float] = Field(None, description="Tax rate percentage applicable to this item")
+    tax_amount: Optional[float] = Field(None, description="Tax amount on this item")
+    batch_no: str = Field(default="", description="Batch or lot number")
+    serial_no: str = Field(default="", description="Serial number")
     hsn_sac: str = Field(default="", description="HSN/SAC code (India) or commodity code")
 
 

@@ -105,6 +105,11 @@
           "amount": { "type": ["number", "null"] },
           "discount_percentage": { "type": ["number", "null"] },
           "discount_amount": { "type": ["number", "null"] },
+          "net_amount": { "type": ["number", "null"] },
+          "tax_rate": { "type": ["number", "null"] },
+          "tax_amount": { "type": ["number", "null"] },
+          "batch_no": { "type": "string" },
+          "serial_no": { "type": "string" },
           "hsn_sac": { "type": "string" }
         },
         "required": ["item_name", "qty", "rate"]
