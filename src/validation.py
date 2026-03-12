@@ -20,7 +20,17 @@ from dataclasses import dataclass, field
 from .models import PurchaseInvoice, TaxIdentifiers
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TOLERANCE = 0.02  # 2% tolerance for numeric comparisons
+
+# ── Configurable thresholds ──────────────────────────────────────────
+_TOLERANCE = 0.02           # 2% tolerance for numeric comparisons
+_MAGNITUDE_HIGH = 3.0       # grand_total / items_sum ratio above this warns
+_MAGNITUDE_LOW = 0.5        # grand_total / items_sum ratio below this warns
+_MAX_TAX_RATE = 100         # max plausible tax rate percentage
+_MAX_DISCOUNT_PCT = 100     # max plausible discount percentage
+_MAX_BILL_NO_LEN = 50       # bill_no longer than this warns of field leak
+_MAX_TAX_ID_LEN = 30        # generic tax_id longer than this warns
+_MIN_SUPPLIER_LEN = 2       # supplier name shorter than this warns
+_YEAR_RANGE = (1900, 2100)  # valid year range for dates
 
 # Indian formats
 _GSTIN_RE = re.compile(r"^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d][A-Z\d]$")
@@ -161,7 +171,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
                 f"(DRAFT/COPY/SAMPLE/etc.) — may be extracted from background")
         if _SUSPICIOUS_CHARS.search(invoice.supplier):
             v.warnings.append(f"supplier contains control characters — possible OCR error")
-        if len(invoice.supplier.strip()) < 2:
+        if len(invoice.supplier.strip()) < _MIN_SUPPLIER_LEN:
             v.warnings.append(f"supplier name too short: '{invoice.supplier}'")
 
     # ── 7. Line item checks ─────────────────────────────────────────
@@ -200,7 +210,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
 
         # Item-level tax validation
         if item.tax_rate is not None:
-            _check(v, 0 < item.tax_rate <= 100,
+            _check(v, 0 < item.tax_rate <= _MAX_TAX_RATE,
                    f"{prefix} tax_rate in valid range",
                    f"{prefix} tax_rate looks wrong: {item.tax_rate}%")
         if item.tax_amount is not None:
@@ -213,7 +223,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
 
         # Discount consistency
         if item.discount_percentage is not None:
-            _check(v, 0 <= item.discount_percentage <= 100,
+            _check(v, 0 <= item.discount_percentage <= _MAX_DISCOUNT_PCT,
                    f"{prefix} discount_percentage in 0-100",
                    f"{prefix} discount_percentage out of range: {item.discount_percentage}")
         if item.discount_amount is not None and item.discount_amount > 0:
@@ -277,7 +287,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
     # ── 12. Magnitude sanity — catch 10x/100x misreads ──────────────
     if invoice.grand_total is not None and items_sum > 0:
         ratio = invoice.grand_total / items_sum
-        if ratio > 3.0 or ratio < 0.5:
+        if ratio > _MAGNITUDE_HIGH or ratio < _MAGNITUDE_LOW:
             v.warnings.append(
                 f"grand_total ({invoice.grand_total}) is {ratio:.1f}x of items sum "
                 f"({items_sum:.2f}) — possible magnitude error (10x/100x misread)")
@@ -296,7 +306,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
             _check(v, bool(tax.description), f"{prefix} has description",
                    f"{prefix} missing description")
             if tax.rate is not None:
-                _check(v, 0 < tax.rate <= 100,
+                _check(v, 0 < tax.rate <= _MAX_TAX_RATE,
                        f"{prefix} rate in valid range",
                        f"{prefix} rate looks wrong: {tax.rate}%")
             if tax.tax_amount is not None:
@@ -308,7 +318,7 @@ def validate_invoice(invoice: PurchaseInvoice) -> ValidationResult:
 
     # ── 15. Bill number sanity ──────────────────────────────────────
     if invoice.bill_no:
-        if len(invoice.bill_no) > 50:
+        if len(invoice.bill_no) > _MAX_BILL_NO_LEN:
             v.warnings.append(
                 f"bill_no is unusually long ({len(invoice.bill_no)} chars) — "
                 f"possible field misalignment")
@@ -354,7 +364,7 @@ def _validate_tax_ids(v: ValidationResult, ids: TaxIdentifiers | None, party: st
 
     # Generic tax_id — just check it's not suspiciously long or has control chars
     if ids.tax_id:
-        if len(ids.tax_id) > 30:
+        if len(ids.tax_id) > _MAX_TAX_ID_LEN:
             v.warnings.append(f"{party} tax_id is very long ({len(ids.tax_id)} chars) — possible field leak")
         if _SUSPICIOUS_CHARS.search(ids.tax_id):
             v.warnings.append(f"{party} tax_id contains control characters")
@@ -390,7 +400,7 @@ def _check_date_valid(v: ValidationResult, date_str: str, field_name: str):
     """Check that a YYYY-MM-DD date is a real calendar date."""
     try:
         year, month, day = map(int, date_str.split("-"))
-        if not (1900 <= year <= 2100):
+        if not (_YEAR_RANGE[0] <= year <= _YEAR_RANGE[1]):
             v.warnings.append(f"{field_name} year {year} looks unusual")
         if not (1 <= month <= 12):
             v.errors.append(f"{field_name} invalid month: {month}")

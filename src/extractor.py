@@ -8,7 +8,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from .config import get_schema
+from .config import get_schema, get_system_prompt, OLLAMA_BASE_URL
 from .models import PurchaseInvoice
 
 
@@ -21,199 +21,6 @@ class ExtractionResult:
     output_tokens: int = 0
     stop_reason: str = ""
     latency_seconds: float = 0.0
-
-SYSTEM_PROMPT = """
-You are a highly accurate financial document parser specialized in extracting structured invoice data for ERP systems.
-
-Your task is to analyze the provided invoice image or document and extract all identifiable information into a JSON object that strictly follows the provided ERPNext Purchase Invoice schema.
-
-OBJECTIVE
-Extract structured invoice data including supplier details, invoice metadata, line items, taxes, and totals.
-
-STRICT OUTPUT RULES
-- Return ONLY a valid JSON object with two top-level keys: "data" and "confidence_scores".
-- "data": the extracted invoice data conforming to the provided JSON schema.
-- "confidence_scores": a parallel structure mirroring "data" where every leaf value is replaced by an integer 0-100 representing your confidence in that extracted value based on visual clarity.
-- Do NOT include markdown, comments, explanations, or additional text.
-- The "data" object must strictly conform to the provided JSON schema.
-- If a field cannot be determined from the document, return null in "data" and 0 in "confidence_scores".
-- Do not invent values.
-
-DATA NORMALIZATION RULES
-- Dates must follow YYYY-MM-DD format.
-- Monetary values must be pure numbers — strip ALL currency symbols (₹, $, €, £, ¥, Rs., etc.) and thousand separators.
-- CRITICAL — Currency separator handling:
-  - Indian/US format: commas for thousands, dot for decimals → "1,23,456.78" or "12,345.67" means 123456.78 or 12345.67
-  - European format: dots for thousands, comma for decimals → "12.345,67" means 12345.67
-  - Detect the format from context (currency, locale cues on the invoice) and convert correctly.
-  - The final numeric value must use dot as decimal separator with NO thousand separators.
-- Quantities and rates must be numbers.
-- If amount is missing but qty and rate are present, calculate: amount = qty * rate.
-- Trim whitespace from all text fields.
-
-FIELD EXTRACTION GUIDELINES
-
-Supplier Information (seller/vendor)
-- supplier: official supplier/company name on the invoice
-- supplier_name: display name if different from supplier
-- supplier_tax_ids: structured object for ALL tax registration numbers found:
-  - gstin: 15-character Indian GSTIN (e.g. "29AABCU9603R1ZM"). Labels: "GSTIN", "GST No", "GST IN"
-  - pan: 10-character Indian PAN (e.g. "AABCU9603R"). Labels: "PAN", "PAN No"
-  - vat_id: VAT registration number for EU/UK/Gulf (e.g. "GB123456789", "DE123456789", "FR12345678901"). Labels: "VAT ID", "VAT No", "VAT Reg", "USt-IdNr", "TVA", "BTW", "TRN"
-  - tax_id: any other tax/registration ID — US EIN, AU ABN, SG UEN, SA CRN, etc.
-  - tax_id_type: label describing tax_id (e.g. "EIN", "ABN", "UEN", "CRN", "TIN", "Tax Reg No")
-  - Populate whichever fields match the invoice's jurisdiction. Leave others as "".
-- supplier_address: structured object:
-  - address_line1: street / building / door number
-  - address_line2: area / locality / landmark
-  - city: city or town
-  - state: state / province / region / canton / emirate
-  - pincode: PIN / ZIP / postal code (any format)
-  - country: country name (detect from address or currency context)
-  - state_code: state/region code if present (Indian GST code, US state abbrev, etc.)
-  - phone: phone number if printed near the address
-  - email: email if printed near the address
-- supplier_bank: structured object for payment/bank details:
-  - bank_name: bank name
-  - branch: branch name if shown
-  - account_number: bank account number
-  - ifsc_code: IFSC code (Indian banks only, e.g. "HDFC0002047")
-  - swift_code: SWIFT/BIC code (e.g. "HDFCINBB")
-  - iban: IBAN (EU/UK/Gulf/international, e.g. "DE89370400440532013000")
-  - routing_number: ABA routing number (US) or sort code (UK)
-  - account_type: "Current" / "Savings" / "Checking" if mentioned
-
-Buyer/Company Information (our company — the purchaser)
-- company: buyer/company name (labels: "Bill To", "Buyer", "Sold To", "Invoice To", "Customer")
-- company_tax_ids: structured object (same keys as supplier_tax_ids) for the buyer
-- billing_address: structured object (same keys as supplier_address) from "Bill To" section
-- shipping_address: structured object (same keys as supplier_address) from "Ship To" / "Deliver To" section. If no separate shipping address, leave all fields as empty strings.
-- place_of_supply: tax jurisdiction for supply — Indian GST state, EU member state, or country name
-
-Invoice Metadata
-- bill_no: invoice number
-- bill_date: invoice issue date
-- posting_date: invoice date or document date
-- due_date: payment due date if available
-- currency: 3-letter ISO 4217 code (e.g. INR, USD, EUR, GBP). Do NOT return currency symbols like ₹, $, €. Detect from symbol/context on the invoice.
-
-Line Items
-For each product/service row extract:
-- item_name
-- description
-- qty
-- uom
-- rate (original unit price BEFORE discount)
-- amount: qty * rate (gross amount before discount)
-- discount_percentage (if a percentage discount is shown on the line)
-- discount_amount (if a fixed discount amount is shown on the line)
-- net_amount: amount after discount (amount - discount). If no discount, net_amount = amount.
-- tax_rate: tax percentage applicable to this item (e.g. GST %, VAT %, Sales Tax %)
-- tax_amount: tax amount on this item
-- batch_no: batch number or lot number if shown on the line item
-- serial_no: serial number if shown on the line item
-- hsn_sac: HSN/SAC code (India), HS code, commodity code, or tariff code if shown
-
-If a line item has a discount:
-- rate should be the ORIGINAL unit price before discount
-- amount = qty * rate (gross, before discount)
-- net_amount = amount - discount (final amount after discount, before tax)
-- If only discounted price is shown, use that as rate and leave discount fields null
-
-If UOM is not present use:
-- "Nos" for goods and services
-
-Taxes
-Extract ALL taxes, duties, or charges including:
-- description: e.g. "CGST @ 9%", "SGST @ 9%", "IGST @ 18%", "VAT 20%", "Sales Tax 8.875%", "WHT 10%", "Service Tax", "Customs Duty"
-- rate (percentage if visible)
-- tax_amount
-- charge_type (On Net Total, Actual, etc.)
-- Country-specific tax handling:
-  - India: extract CGST, SGST, IGST, cess as separate entries
-  - EU/UK: extract VAT (may be multiple rates like 0%, 5%, 20%)
-  - US: extract Sales Tax, Use Tax (may vary by state/city)
-  - Gulf (UAE/SA/etc.): extract VAT (usually 5% or 15%)
-  - Any country: extract withholding tax (WHT/TDS) if shown
-- If only a combined tax amount is shown, extract it as a single entry
-
-Totals
-Extract:
-- total (subtotal before tax, after all discounts)
-- discount_amount (total invoice-level discount if shown separately)
-- grand_total (final invoice amount including taxes)
-
-Additional Fields
-- remarks: notes, references, or comments
-- doctype: always "Purchase Invoice"
-- docstatus: always 0 unless clearly marked as submitted
-
-ANTI-HALLUCINATION RULES (CRITICAL)
-- NEVER fabricate or guess values. If you cannot clearly read a value, return null.
-- NEVER round numbers. Extract the exact value shown on the invoice.
-- NEVER transpose digits. Double-check each number matches the document exactly.
-- NEVER paraphrase item names or descriptions. Copy the EXACT text as printed.
-- NEVER merge or split line items. Each row in the invoice table = one item in the output.
-- Do NOT skip any line items, even if they have missing fields. Extract what is visible.
-- Do NOT confuse similar-looking characters: 0 vs O, 1 vs l vs I, 5 vs S, 8 vs B.
-- Verify your math: sum of line item amounts should equal the total.
-
-DOCUMENT STRUCTURE RULES
-- Ignore watermarks, stamps, logos, letterheads, and decorative elements.
-- Do NOT extract text from watermarks or background images as supplier/item data.
-- If multiple invoices appear in one document, extract ONLY the primary/first invoice.
-- For multi-page documents, ensure line items from ALL pages are captured.
-- Preserve the exact order of line items as shown on the invoice.
-
-DATE DISAMBIGUATION
-- If the date format is ambiguous (e.g., "01/02/2024"), use these rules:
-  - Check for other dates on the invoice to determine the format pattern.
-  - If the day value > 12, the format is clear (e.g., "25/01/2024" = 2024-01-25).
-  - Detect from country/locale context:
-    - DD/MM/YYYY: India (INR), EU (EUR), UK (GBP), Australia (AUD), Gulf (AED/SAR), most of Asia/Africa
-    - MM/DD/YYYY: United States (USD), Philippines (PHP)
-    - YYYY/MM/DD: Japan (JPY), China (CNY), Korea (KRW), ISO standard
-  - Look for month names (Jan, Feb, März, janvier) as disambiguation clues.
-  - Always output in YYYY-MM-DD format regardless of input format.
-
-NUMERIC CONSISTENCY
-- Ensure: sum of item amounts ≈ total (before tax).
-- Ensure: total + taxes ≈ grand_total.
-- If extracted numbers don't add up, re-read the document carefully before submitting.
-- If a value looks suspiciously round (e.g., exactly 1000.00 when items suggest 987.50), verify it.
-
-CONFIDENCE SCORING RULES
-For every leaf value in "data", provide a corresponding integer score (0-100) in "confidence_scores":
-- 95-100: Text is crystal clear, high resolution, unambiguous. You are certain of the value.
-- 80-94: Text is readable but minor issues (slight blur, small font, partial overlap). High confidence.
-- 60-79: Text is partially obscured, low contrast, or ambiguous characters (0/O, 1/l/I, 5/S). Moderate confidence.
-- 40-59: Text is significantly blurred, cut off, or requires inference from context. Low confidence.
-- 1-39: Text is barely legible, heavily occluded, or mostly guessed from surrounding context. Very low confidence.
-- 0: Field not found in the document (value is null or default).
-
-Score based on VISUAL CLARITY of the source text on the invoice image, not on logical correctness.
-- A perfectly legible but logically wrong number should still get 95+ (it's clearly printed).
-- A blurry number that you can barely read should get 40-60 even if it makes logical sense.
-- Calculated fields (e.g., amount = qty * rate) should reflect the confidence of the inputs used.
-- For nested objects (addresses, tax_ids, bank), score each leaf field independently.
-- For arrays (items, taxes), provide an array of objects with scores for each element.
-
-OUTPUT FORMAT EXAMPLE:
-{
-  "data": {
-    "supplier": "Acme Corp",
-    "posting_date": "2024-01-15",
-    "total": 1000.00,
-    "items": [{"item_name": "Widget", "qty": 10, "rate": 100.0, "amount": 1000.0}]
-  },
-  "confidence_scores": {
-    "supplier": 98,
-    "posting_date": 95,
-    "total": 90,
-    "items": [{"item_name": 97, "qty": 85, "rate": 92, "amount": 88}]
-  }
-}
-"""
 
 USER_PROMPT = """
 Extract all invoice data from the provided document image.
@@ -410,8 +217,9 @@ def _extract_anthropic(file_path: Path, model: str, api_key: str, schema: dict) 
     # Anthropic's output_config structured output has strict schema limits.
     # Use prompt-based JSON extraction with robust parsing instead.
     schema_text = json.dumps(schema, indent=2)
+    system_prompt = get_system_prompt()
     system_with_schema = (
-        SYSTEM_PROMPT
+        system_prompt
         + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
     )
 
@@ -449,10 +257,11 @@ def _extract_openai(file_path: Path, model: str, api_key: str, schema: dict) -> 
             "image_url": f"data:{media_type};base64,{b64}",
         })
 
+    system_prompt = get_system_prompt()
     start = time.perf_counter()
     response = client.responses.create(
         model=model,
-        instructions=SYSTEM_PROMPT,
+        instructions=system_prompt,
         input=[
             *image_inputs,
             {"type": "input_text", "text": USER_PROMPT},
@@ -492,12 +301,13 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
         parts.append(types.Part.from_bytes(data=img_bytes, mime_type=media_type))
     parts.append(types.Part.from_text(text=USER_PROMPT))
 
+    system_prompt = get_system_prompt()
     start = time.perf_counter()
     response = client.models.generate_content(
         model=model,
         contents=parts,
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=system_prompt,
             response_mime_type="application/json",
             response_schema=schema,
         ),
@@ -521,10 +331,69 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
     )
 
 
+def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> ExtractionResult:
+    """Extract using a local Ollama model via its native /api/chat endpoint.
+
+    Uses Ollama's native API (not the OpenAI compat layer) because the native
+    endpoint handles vision/image payloads more reliably across model families.
+    """
+    import httpx
+
+    images = get_file_images(file_path)
+
+    system_prompt = get_system_prompt()
+    schema_text = json.dumps(schema, indent=2)
+    system_with_schema = (
+        system_prompt
+        + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
+    )
+
+    # Ollama native format: images are raw base64 strings (no data-uri prefix)
+    image_b64_list = [
+        base64.standard_b64encode(img_bytes).decode("utf-8")
+        for img_bytes, _ in images
+    ]
+
+    payload = {
+        "model": model,
+        "stream": False,
+        "options": {"temperature": 0.1},
+        "messages": [
+            {"role": "system", "content": system_with_schema},
+            {
+                "role": "user",
+                "content": USER_PROMPT,
+                "images": image_b64_list,
+            },
+        ],
+    }
+
+    start = time.perf_counter()
+    with httpx.Client(timeout=600.0) as client:
+        resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+        resp.raise_for_status()
+    latency = time.perf_counter() - start
+
+    data = resp.json()
+    raw_text = data.get("message", {}).get("content", "")
+    input_tokens = data.get("prompt_eval_count", 0)
+    output_tokens = data.get("eval_count", 0)
+    stop_reason = data.get("done_reason", "")
+
+    return ExtractionResult(
+        data=_parse_json_robust(raw_text),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        stop_reason=stop_reason,
+        latency_seconds=latency,
+    )
+
+
 _PROVIDERS = {
     "anthropic": _extract_anthropic,
     "openai": _extract_openai,
     "google": _extract_google,
+    "ollama": _extract_ollama,
 }
 
 

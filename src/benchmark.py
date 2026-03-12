@@ -74,13 +74,30 @@ _PRICING = {
     "gemini-2.5-pro":           (1.25, 10.00),
     "gemini-2.5-flash":         (0.15, 0.60),
     "gemini-2.0-flash":         (0.10, 0.40),
+    # Ollama / local models — no API cost
+    "qwen2.5vl:7b":             (0.0, 0.0),
+    "qwen2.5vl:32b":            (0.0, 0.0),
+    "gemma3:27b":               (0.0, 0.0),
+    "qwen3:8b":                 (0.0, 0.0),
 }
 
 
+_warned_models: set[str] = set()
+
+
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate cost in USD based on token usage."""
+    """Estimate cost in USD based on token usage.
+
+    Returns 0.0 and prints a warning if the model is not in the pricing table.
+    """
     pricing = _PRICING.get(model)
     if not pricing:
+        if model not in _warned_models:
+            _warned_models.add(model)
+            print(
+                f"    [warn] No pricing data for model '{model}' — "
+                f"cost estimates will show $0. Update _PRICING in benchmark.py."
+            )
         return 0.0
     input_rate, output_rate = pricing
     return (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
