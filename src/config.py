@@ -38,7 +38,7 @@ _DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-5.4",
     "google": "gemini-3-flash-preview",
-    "ollama": "qwen2.5vl:7b",
+    "ollama": "gemma3:27b",
 }
 
 

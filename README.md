@@ -1,6 +1,6 @@
 # Invoice Extractor
 
-A multi-provider AI vision benchmarking tool that extracts structured purchase invoice data from PDFs and images into ERPNext-ready JSON with per-field confidence scores. Compare extraction quality, speed, and cost across Anthropic, OpenAI, and Google models — no OCR setup needed.
+A multi-provider AI vision benchmarking tool that extracts structured purchase invoice data from PDFs and images into ERPNext-ready JSON with per-field confidence scores. Compare extraction quality, speed, and cost across Anthropic, OpenAI, Google, and Ollama (local) models — no OCR setup needed.
 
 ---
 
@@ -22,7 +22,7 @@ A multi-provider AI vision benchmarking tool that extracts structured purchase i
 ### Prerequisites
 
 - Python 3.10+
-- An API key from at least one provider ([Anthropic](https://console.anthropic.com/settings/keys) | [OpenAI](https://platform.openai.com/api-keys) | [Google](https://aistudio.google.com/apikey))
+- An API key from at least one cloud provider ([Anthropic](https://console.anthropic.com/settings/keys) | [OpenAI](https://platform.openai.com/api-keys) | [Google](https://aistudio.google.com/apikey)), **or** a running [Ollama](https://ollama.com/) instance with a vision model
 
 ### 1. Clone & setup environment
 
@@ -35,35 +35,42 @@ source .venv/bin/activate        # macOS/Linux
 # .venv\Scripts\activate         # Windows
 ```
 
-### 2. Install all dependencies (one command)
+### 2. Install dependencies
 
 ```bash
-# Core + all provider SDKs
+# Core + all cloud provider SDKs
 pip install ".[all]"
 ```
 
-Or install only the provider you need:
+Or install only what you need:
 
 ```bash
+pip install .                    # Core only (Ollama needs no extra SDK)
 pip install ".[anthropic]"       # Anthropic only
 pip install ".[openai]"          # OpenAI only
 pip install ".[google]"          # Google only
 ```
 
-This installs everything defined in `pyproject.toml` — PyMuPDF, Pydantic, Pillow, python-dotenv, and your chosen provider SDK.
+This installs everything defined in `pyproject.toml` — PyMuPDF, Pydantic, Pillow, python-dotenv, and your chosen provider SDK. Ollama uses HTTP directly (`httpx`), so `pip install .` is enough.
 
-### 3. Configure your API key
+### 3. Configure your provider
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` for your preferred provider:
 
 ```env
+# --- Cloud provider (pick one) ---
 AI_PROVIDER=anthropic
 AI_MODEL=claude-sonnet-4-6
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
+
+# --- OR local Ollama (free, no API key needed) ---
+AI_PROVIDER=ollama
+AI_MODEL=qwen2.5vl:32b
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 ### 4. Run
@@ -84,6 +91,7 @@ That's it. JSON output appears in `output/`, metrics in `logs/benchmark.csv`.
 | Anthropic | `claude-sonnet-4-6`, `claude-opus-4-6`   | `claude-haiku-4-5`                                          |
 | OpenAI    | `gpt-5.4`, `gpt-5`                      | `gpt-5.2`, `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`            |
 | Google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
+| Ollama    | `qwen2.5vl:32b`, `gemma3:27b`           | `qwen2.5vl:7b`, any vision-capable Ollama model             |
 
 ### Cost Estimates (per 1M tokens)
 
@@ -98,6 +106,7 @@ That's it. JSON output appears in `output/`, metrics in `logs/benchmark.csv`.
 | `gemini-3-flash-preview` | $0.50  | $3.00   |
 | `gemini-2.5-pro`         | $1.25  | $10.00  |
 | `gemini-2.5-flash`       | $0.15  | $0.60   |
+| Ollama models            | Free   | Free    |
 
 ---
 
@@ -114,6 +123,9 @@ python -m src.main
 
 # Or override provider/model inline
 AI_PROVIDER=openai AI_MODEL=gpt-5.4 python -m src.main
+
+# Run with local Ollama
+AI_PROVIDER=ollama AI_MODEL=qwen2.5vl:32b python -m src.main
 
 # Custom input/output folders
 python -m src.main /path/to/invoices /path/to/output
@@ -270,7 +282,7 @@ Every run appends metrics to `logs/benchmark.csv`. Use this to compare models si
 | --------------------- | ------------------------------------------------ |
 | `timestamp`           | UTC ISO timestamp of extraction                  |
 | `file_name`           | Input file name                                  |
-| `provider`            | `anthropic`, `openai`, or `google`               |
+| `provider`            | `anthropic`, `openai`, `google`, or `ollama`     |
 | `model`               | Model ID used                                    |
 | `status`              | `success` or `error`                             |
 | `latency_seconds`     | Wall-clock time for the API call                 |
@@ -306,6 +318,9 @@ AI_PROVIDER=openai AI_MODEL=gpt-5.4 python -m src.main
 
 # Run 3: Google Gemini Flash
 AI_PROVIDER=google AI_MODEL=gemini-3-flash-preview python -m src.main
+
+# Run 4: Ollama (local, free)
+AI_PROVIDER=ollama AI_MODEL=qwen2.5vl:32b python -m src.main
 ```
 
 All results append to the same `logs/benchmark.csv` for easy comparison in a spreadsheet or pandas.
@@ -357,16 +372,30 @@ The validation module runs quality checks on every extraction, catching common A
 
 All configuration is via the `.env` file:
 
-| Variable           | Default              | Description                              |
-| ------------------ | -------------------- | ---------------------------------------- |
-| `AI_PROVIDER`      | `anthropic`          | `anthropic`, `openai`, or `google`       |
-| `AI_MODEL`         | `claude-sonnet-4-6`  | Any vision model from your provider      |
-| `ANTHROPIC_API_KEY` | —                   | API key for Anthropic                    |
-| `OPENAI_API_KEY`   | —                    | API key for OpenAI                       |
-| `GOOGLE_API_KEY`   | —                    | API key for Google                       |
-| `SCHEMA_PATH`      | `schema.json`        | Path to custom JSON schema (optional)    |
+| Variable           | Default                      | Description                                      |
+| ------------------ | ---------------------------- | ------------------------------------------------ |
+| `AI_PROVIDER`      | `anthropic`                  | `anthropic`, `openai`, `google`, or `ollama`     |
+| `AI_MODEL`         | `claude-sonnet-4-6`          | Any vision model from your provider              |
+| `ANTHROPIC_API_KEY` | —                           | API key for Anthropic                            |
+| `OPENAI_API_KEY`   | —                            | API key for OpenAI                               |
+| `GOOGLE_API_KEY`   | —                            | API key for Google                               |
+| `OLLAMA_BASE_URL`  | `http://192.168.1.9:11434`   | Ollama server URL (no API key needed)            |
+| `SCHEMA_PATH`      | `schema.json`                | Path to custom JSON schema (optional)            |
+| `PROMPT_PATH`      | `prompt.txt`                 | Path to custom system prompt (optional)          |
 
 To switch providers, update `.env` — no code changes needed.
+
+### Ollama Setup
+
+1. [Install Ollama](https://ollama.com/download) on your machine (or a remote server)
+2. Pull a vision-capable model:
+   ```bash
+   ollama pull qwen2.5vl:32b    # Best quality (needs ~30GB VRAM)
+   ollama pull gemma3:27b        # Good alternative
+   ollama pull qwen2.5vl:7b     # Lighter option
+   ```
+3. Set `OLLAMA_BASE_URL` in `.env` to point to your Ollama instance
+4. **Tip:** Only keep one large model loaded at a time. The extractor uses `keep_alive: 10m` so models auto-unload after 10 minutes of inactivity, freeing VRAM for other models.
 
 ---
 
@@ -379,6 +408,8 @@ To switch providers, update `.env` — no code changes needed.
 | Image size limits        | Auto-resizes images >5MB using Pillow before sending to API  |
 | JSON truncation          | Uses 16,384 max output tokens to handle large invoices       |
 | Robust JSON parsing      | Handles markdown fences, trailing commas, surrounding text   |
+| Ollama timeout           | 600-second timeout for local models (large invoices can be slow) |
+| Ollama VRAM management   | `keep_alive: 10m` auto-unloads models after inactivity       |
 
 ---
 
@@ -397,6 +428,9 @@ To switch providers, update `.env` — no code changes needed.
 | `Failed to parse JSON`           | Model returned non-JSON; try a different model              |
 | Low validation score             | Check `validation_errors` in CSV for specific failures      |
 | Image too large error            | Auto-resize handles this; ensure Pillow is installed        |
+| Ollama 500 / model crash         | VRAM contention — unload other models: `curl -X POST http://host:11434/api/generate -d '{"model":"other_model","keep_alive":0}'` |
+| Ollama connection refused        | Check `OLLAMA_BASE_URL` in `.env` and that Ollama is running |
+| Ollama slow response             | Normal for large models; 600s timeout is set automatically  |
 
 ---
 
@@ -407,10 +441,11 @@ invoice-extractor/
 |-- .env                             <- Provider config & API keys (git-ignored)
 |-- .env.example                     <- Template for .env
 |-- schema.json                      <- ERPNext Purchase Invoice JSON schema
+|-- prompt.txt                       <- System prompt for extraction rules
 |-- pyproject.toml                   <- Python package config & dependencies
 |-- README.md                        <- This file
 |
-|-- input/                           <- Drop invoice files here
+|-- input/                           <- Drop invoice files here (git-ignored)
 |-- output/                          <- JSON output files (git-ignored)
 |-- logs/                            <- Benchmark CSV logs (git-ignored)
 |
@@ -418,7 +453,7 @@ invoice-extractor/
 |   |-- __init__.py
 |   |-- config.py                    <- .env loading, provider/model/key resolution
 |   |-- models.py                    <- Pydantic models (PurchaseInvoice schema)
-|   |-- extractor.py                 <- AI vision extraction + system prompt
+|   |-- extractor.py                 <- AI vision extraction (Anthropic/OpenAI/Google/Ollama)
 |   |-- validation.py                <- Quality validation engine
 |   |-- benchmark.py                 <- Metrics dataclass + CSV logger
 |   |-- main.py                      <- CLI entry point, orchestration loop
@@ -442,7 +477,7 @@ main.py
 
 | Decision                       | Rationale                                                        |
 | ------------------------------ | ---------------------------------------------------------------- |
-| Multi-provider support         | Compare models fairly; avoid vendor lock-in                      |
+| Multi-provider support         | Compare cloud and local models fairly; avoid vendor lock-in      |
 | Image-based extraction         | Works with scanned PDFs, photos, digital PDFs — universal input  |
 | PyMuPDF for PDF rendering      | Fast, no external dependencies (Poppler/Tesseract not needed)    |
 | 200 DPI rendering              | Balance between quality and token cost                           |

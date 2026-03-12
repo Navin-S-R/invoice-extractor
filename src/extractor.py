@@ -84,8 +84,6 @@ def _parse_json_robust(raw_text: str) -> dict:
 
 
 _MAX_IMAGE_BYTES = 4_800_000  # stay under Anthropic's 5MB limit
-
-
 def _resize_if_needed(img_bytes: bytes, media_type: str) -> tuple[bytes, str]:
     """Shrink image if it exceeds the API size limit. Returns JPEG to save space."""
     if len(img_bytes) <= _MAX_IMAGE_BYTES:
@@ -356,8 +354,9 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
 
     payload = {
         "model": model,
+        "keep_alive": "10m",
         "stream": False,
-        "options": {"temperature": 0.1},
+        "options": {"num_ctx": 32768, "temperature": 0.1},
         "messages": [
             {"role": "system", "content": system_with_schema},
             {
