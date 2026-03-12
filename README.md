@@ -69,7 +69,7 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
 
 # --- OR local Ollama (free, no API key needed) ---
 AI_PROVIDER=ollama
-AI_MODEL=qwen2.5vl:32b
+AI_MODEL=qwen3-vl:32b
 OLLAMA_BASE_URL=http://localhost:11434
 ```
 
@@ -91,7 +91,7 @@ That's it. JSON output appears in `output/`, metrics in `logs/benchmark.csv`.
 | Anthropic | `claude-sonnet-4-6`, `claude-opus-4-6`   | `claude-haiku-4-5`                                          |
 | OpenAI    | `gpt-5.4`, `gpt-5`                      | `gpt-5.2`, `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`            |
 | Google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
-| Ollama    | `qwen2.5vl:32b`, `gemma3:27b`           | `qwen2.5vl:7b`, any vision-capable Ollama model             |
+| Ollama    | `qwen3-vl:32b`, `gemma3:27b`             | `qwen2.5vl:32b`, `qwen2.5vl:7b`, any vision-capable model  |
 
 ### Cost Estimates (per 1M tokens)
 
@@ -125,7 +125,7 @@ python -m src.main
 AI_PROVIDER=openai AI_MODEL=gpt-5.4 python -m src.main
 
 # Run with local Ollama
-AI_PROVIDER=ollama AI_MODEL=qwen2.5vl:32b python -m src.main
+AI_PROVIDER=ollama AI_MODEL=qwen3-vl:32b python -m src.main
 
 # Custom input/output folders
 python -m src.main /path/to/invoices /path/to/output
@@ -320,7 +320,7 @@ AI_PROVIDER=openai AI_MODEL=gpt-5.4 python -m src.main
 AI_PROVIDER=google AI_MODEL=gemini-3-flash-preview python -m src.main
 
 # Run 4: Ollama (local, free)
-AI_PROVIDER=ollama AI_MODEL=qwen2.5vl:32b python -m src.main
+AI_PROVIDER=ollama AI_MODEL=qwen3-vl:32b python -m src.main
 ```
 
 All results append to the same `logs/benchmark.csv` for easy comparison in a spreadsheet or pandas.
@@ -390,9 +390,10 @@ To switch providers, update `.env` — no code changes needed.
 1. [Install Ollama](https://ollama.com/download) on your machine (or a remote server)
 2. Pull a vision-capable model:
    ```bash
-   ollama pull qwen2.5vl:32b    # Best quality (needs ~30GB VRAM)
-   ollama pull gemma3:27b        # Good alternative
-   ollama pull qwen2.5vl:7b     # Lighter option
+   ollama pull qwen3-vl:32b     # Best quality, 128K context (~37GB VRAM)
+   ollama pull gemma3:27b        # Good alternative, 128K context (~32GB VRAM)
+   ollama pull qwen2.5vl:32b    # Older Qwen, 32K context (~29GB VRAM)
+   ollama pull qwen2.5vl:7b     # Lighter option, 32K context (~9GB VRAM)
    ```
 3. Set `OLLAMA_BASE_URL` in `.env` to point to your Ollama instance
 4. **Tip:** Only keep one large model loaded at a time. The extractor uses `keep_alive: 10m` so models auto-unload after 10 minutes of inactivity, freeing VRAM for other models.

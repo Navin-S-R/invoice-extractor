@@ -329,6 +329,17 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
     )
 
 
+# Per-model context window sizes for Ollama.
+# Sized for a 64GB RAM machine — balances context capacity vs KV cache memory.
+_OLLAMA_NUM_CTX = {
+    "qwen3-vl:32b": 65536,     # 128K native, ~16GB KV cache
+    "qwen2.5vl:32b": 32768,    # 32K native,  ~8GB KV cache
+    "qwen2.5vl:7b": 32768,     # 32K native,  ~4GB KV cache
+    "gemma3:27b": 65536,        # 128K native, ~14GB KV cache
+}
+_OLLAMA_NUM_CTX_DEFAULT = 32768
+
+
 def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> ExtractionResult:
     """Extract using a local Ollama model via its native /api/chat endpoint.
 
@@ -352,11 +363,13 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
         for img_bytes, _ in images
     ]
 
+    num_ctx = _OLLAMA_NUM_CTX.get(model, _OLLAMA_NUM_CTX_DEFAULT)
+
     payload = {
         "model": model,
         "keep_alive": "10m",
         "stream": False,
-        "options": {"num_ctx": 32768, "temperature": 0.1},
+        "options": {"num_ctx": num_ctx, "temperature": 0.1},
         "messages": [
             {"role": "system", "content": system_with_schema},
             {
