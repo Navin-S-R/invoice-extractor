@@ -380,8 +380,16 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
         ],
     }
 
+    # Large models (32B+ with 64K ctx) can take several minutes to load
+    # into VRAM and generate output.  Use generous per-phase timeouts:
+    #   connect  = 120s  (model loading / cold start)
+    #   read     = 900s  (token generation for complex invoices)
+    #   write    = 120s  (sending large base64 image payloads)
+    #   pool     = 60s
+    timeout = httpx.Timeout(connect=120.0, read=900.0, write=120.0, pool=60.0)
+
     start = time.perf_counter()
-    with httpx.Client(timeout=600.0) as client:
+    with httpx.Client(timeout=timeout) as client:
         resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
         resp.raise_for_status()
     latency = time.perf_counter() - start
