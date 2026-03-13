@@ -330,15 +330,18 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
     parts.append(types.Part.from_text(text=USER_PROMPT))
 
     system_prompt = get_system_prompt()
-    google_schema = _prepare_google_schema(schema)
+    schema_text = json.dumps(schema, indent=2)
+    system_with_schema = (
+        system_prompt
+        + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
+    )
     start = time.perf_counter()
     response = client.models.generate_content(
         model=model,
         contents=parts,
         config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=system_with_schema,
             response_mime_type="application/json",
-            response_schema=google_schema,
         ),
     )
     latency = time.perf_counter() - start
