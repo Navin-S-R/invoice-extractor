@@ -72,7 +72,7 @@ _PRICING = {
     "gemini-3.1-pro-preview":   (2.00, 12.00),
     # Google — legacy
     "gemini-2.5-pro":           (1.25, 10.00),
-    "gemini-2.5-flash":         (0.15, 0.60),
+    "gemini-2.5-flash":         (0.30, 2.50),
     "gemini-2.0-flash":         (0.10, 0.40),
     # Ollama / local models — no API cost
     "qwen2.5vl:7b":             (0.0, 0.0),
