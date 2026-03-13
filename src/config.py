@@ -37,7 +37,7 @@ PROMPT_PATH = Path(os.getenv("PROMPT_PATH", _project_root / "prompt.txt"))
 _DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-5.4",
-    "google": "gemini-3-flash-preview",
+    "google": "gemini-2.5-flash",
     "ollama": "qwen3-vl:32b",
 }
 

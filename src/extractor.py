@@ -286,6 +286,36 @@ def _extract_openai(file_path: Path, model: str, api_key: str, schema: dict) -> 
     )
 
 
+def _prepare_google_schema(schema: dict) -> dict:
+    """Make a schema compatible with Google's Gemini API.
+
+    Gemini requires a single type string, not array-style nullable types.
+    Converts {"type": ["string", "null"]} to {"type": "STRING", "nullable": true}.
+    """
+    import copy
+    schema = copy.deepcopy(schema)
+
+    def _patch(node):
+        if not isinstance(node, dict):
+            return
+        t = node.get("type")
+        if isinstance(t, list):
+            non_null = [x for x in t if x != "null"]
+            node["type"] = non_null[0] if non_null else "string"
+            if "null" in t:
+                node["nullable"] = True
+        for key, value in list(node.items()):
+            if isinstance(value, dict):
+                _patch(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        _patch(item)
+
+    _patch(schema)
+    return schema
+
+
 def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> ExtractionResult:
     from google import genai
     from google.genai import types
@@ -300,6 +330,7 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
     parts.append(types.Part.from_text(text=USER_PROMPT))
 
     system_prompt = get_system_prompt()
+    google_schema = _prepare_google_schema(schema)
     start = time.perf_counter()
     response = client.models.generate_content(
         model=model,
@@ -307,7 +338,7 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             response_mime_type="application/json",
-            response_schema=schema,
+            response_schema=google_schema,
         ),
     )
     latency = time.perf_counter() - start
