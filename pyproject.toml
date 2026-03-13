@@ -15,7 +15,16 @@ dependencies = [
 anthropic = ["anthropic>=0.40.0"]
 openai = ["openai>=1.60.0"]
 google = ["google-genai>=1.0.0"]
-all = ["anthropic>=0.40.0", "openai>=1.60.0", "google-genai>=1.0.0"]
+api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.34.0", "python-multipart>=0.0.9"]
+all = [
+    "anthropic>=0.40.0",
+    "openai>=1.60.0",
+    "google-genai>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.9",
+]
 
 [project.scripts]
 extract-invoices = "src.main:main"
+extract-invoices-api = "src.api:main"
