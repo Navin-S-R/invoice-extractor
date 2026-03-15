@@ -15,7 +15,7 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
 AI_MODEL = os.getenv("AI_MODEL", "claude-sonnet-4-6")
 
 if AI_PROVIDER not in _VALID_PROVIDERS:
-    raise ValueError(f"Invalid AI_PROVIDER='{AI_PROVIDER}'. Must be one of: {', '.join(sorted(_VALID_PROVIDERS))}")
+	raise ValueError(f"Invalid AI_PROVIDER='{AI_PROVIDER}'. Must be one of: {', '.join(sorted(_VALID_PROVIDERS))}")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -32,49 +32,49 @@ PROMPT_PATH = Path(os.getenv("PROMPT_PATH", _project_root / "prompt.txt"))
 
 # Resolved model defaults per provider
 _DEFAULT_MODELS = {
-    "anthropic": "claude-sonnet-4-6",
-    "openai": "gpt-5.4",
-    "google": "gemini-2.5-flash",
-    "ollama": "qwen3-vl:32b",
+	"anthropic": "claude-sonnet-4-6",
+	"openai": "gpt-5.4",
+	"google": "gemini-2.5-flash",
+	"ollama": "qwen3-vl:32b",
 }
 
 
 def get_model() -> str:
-    """Return the configured model, falling back to provider default."""
-    if AI_MODEL:
-        return AI_MODEL
-    return _DEFAULT_MODELS.get(AI_PROVIDER, "claude-sonnet-4-6")
+	"""Return the configured model, falling back to provider default."""
+	if AI_MODEL:
+		return AI_MODEL
+	return _DEFAULT_MODELS.get(AI_PROVIDER, "claude-sonnet-4-6")
 
 
 def get_schema() -> dict:
-    """Load the JSON schema from the configured path."""
-    import json
+	"""Load the JSON schema from the configured path."""
+	import json
 
-    if not SCHEMA_PATH.exists():
-        raise FileNotFoundError(f"Schema file not found: {SCHEMA_PATH}\nCreate one or set SCHEMA_PATH in .env")
-    return json.loads(SCHEMA_PATH.read_text())
+	if not SCHEMA_PATH.exists():
+		raise FileNotFoundError(f"Schema file not found: {SCHEMA_PATH}\nCreate one or set SCHEMA_PATH in .env")
+	return json.loads(SCHEMA_PATH.read_text())
 
 
 def get_system_prompt() -> str:
-    """Load the system prompt from the configured path."""
-    if not PROMPT_PATH.exists():
-        raise FileNotFoundError(f"Prompt file not found: {PROMPT_PATH}\nCreate one or set PROMPT_PATH in .env")
-    return PROMPT_PATH.read_text().strip()
+	"""Load the system prompt from the configured path."""
+	if not PROMPT_PATH.exists():
+		raise FileNotFoundError(f"Prompt file not found: {PROMPT_PATH}\nCreate one or set PROMPT_PATH in .env")
+	return PROMPT_PATH.read_text().strip()
 
 
 def get_api_key() -> str:
-    """Return the API key for the configured provider.
+	"""Return the API key for the configured provider.
 
-    Ollama runs locally and does not require an API key.
-    """
-    if AI_PROVIDER == "ollama":
-        return "ollama"  # placeholder — Ollama needs no auth
-    keys = {
-        "anthropic": ANTHROPIC_API_KEY,
-        "openai": OPENAI_API_KEY,
-        "google": GOOGLE_API_KEY,
-    }
-    key = keys.get(AI_PROVIDER, "")
-    if not key:
-        raise ValueError(f"No API key set for provider '{AI_PROVIDER}'. Set the corresponding key in .env")
-    return key
+	Ollama runs locally and does not require an API key.
+	"""
+	if AI_PROVIDER == "ollama":
+		return "ollama"  # placeholder — Ollama needs no auth
+	keys = {
+		"anthropic": ANTHROPIC_API_KEY,
+		"openai": OPENAI_API_KEY,
+		"google": GOOGLE_API_KEY,
+	}
+	key = keys.get(AI_PROVIDER, "")
+	if not key:
+		raise ValueError(f"No API key set for provider '{AI_PROVIDER}'. Set the corresponding key in .env")
+	return key
