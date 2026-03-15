@@ -435,12 +435,78 @@ To switch providers, update `.env` — no code changes needed.
 
 ---
 
+## Development Setup
+
+### First-time setup
+
+```bash
+# Install all dependencies + dev tools (pre-commit, ruff, mypy)
+pip install -e ".[all]"
+
+# Install git hooks (pre-commit + commit-msg)
+pre-commit install
+pre-commit install --hook-type commit-msg
+```
+
+> **Note:** `pre-commit` and `ruff` are included in the `[all]` and `[dev]` extras in `pyproject.toml`, so every team member gets them automatically on install.
+
+### What the hooks enforce
+
+| Hook                    | Stage      | What it does                                                   |
+| ----------------------- | ---------- | -------------------------------------------------------------- |
+| `trailing-whitespace`   | pre-commit | Removes trailing whitespace                                    |
+| `end-of-file-fixer`     | pre-commit | Ensures files end with a newline                               |
+| `no-commit-to-branch`   | pre-commit | Blocks direct commits to `develop`                             |
+| `check-merge-conflict`  | pre-commit | Catches unresolved merge conflict markers                      |
+| `check-ast`             | pre-commit | Validates Python syntax                                        |
+| `check-json`            | pre-commit | Validates JSON files                                           |
+| `check-toml`            | pre-commit | Validates TOML files                                           |
+| `check-yaml`            | pre-commit | Validates YAML files                                           |
+| `check-added-large-files` | pre-commit | Rejects files > 1MB                                          |
+| `debug-statements`      | pre-commit | Catches leftover `breakpoint()` / `pdb` calls                 |
+| `detect-private-key`    | pre-commit | Prevents accidental key commits                                |
+| `ruff import sorter`    | pre-commit | Auto-sorts imports (isort-compatible)                          |
+| `ruff linter`           | pre-commit | Lints Python code (pyflakes, pycodestyle, bugbear, etc.)       |
+| `ruff formatter`        | pre-commit | Formats code (tab indentation, double quotes)                  |
+| `commitlint`            | commit-msg | Enforces [Conventional Commits](https://www.conventionalcommits.org/) |
+
+### Commit message format
+
+All commits must follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>: <description>
+
+[optional body]
+```
+
+Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+Examples:
+```bash
+git commit -m "feat: add batch processing for multiple invoices"
+git commit -m "fix: handle missing tax_amount in validation"
+git commit -m "docs: update API endpoint documentation"
+git commit -m "refactor: extract shared pipeline into helpers.py"
+```
+
+### Branch protection
+
+- **`develop`** is protected — direct commits and pushes are blocked by `no-commit-to-branch` hook
+- All changes must go through a feature branch and pull request
+- Workflow: `git checkout -b feature/my-change` → commit → push → open PR to `develop`
+
+---
+
 ## Project Structure
 
 ```
 invoice-extractor/
 |-- .env                             <- Provider config & API keys (git-ignored)
 |-- .env.example                     <- Template for .env
+|-- .pre-commit-config.yaml          <- Pre-commit hook configuration
+|-- .commitlintrc.yaml               <- Conventional commit rules
+|-- CLAUDE.md                        <- Project context for Claude Code
 |-- schema.json                      <- ERPNext Purchase Invoice JSON schema
 |-- prompt.txt                       <- System prompt for extraction rules
 |-- pyproject.toml                   <- Python package config & dependencies
@@ -448,6 +514,7 @@ invoice-extractor/
 |
 |-- input/                           <- Drop invoice files here (git-ignored)
 |-- output/                          <- JSON output files (git-ignored)
+|-- uploads/                         <- Temporary API uploads (git-ignored)
 |-- logs/                            <- Benchmark CSV logs (git-ignored)
 |
 |-- src/
@@ -455,21 +522,24 @@ invoice-extractor/
 |   |-- config.py                    <- .env loading, provider/model/key resolution
 |   |-- models.py                    <- Pydantic models (PurchaseInvoice schema)
 |   |-- extractor.py                 <- AI vision extraction (Anthropic/OpenAI/Google/Ollama)
+|   |-- helpers.py                   <- Shared pipeline: run_extraction_pipeline()
 |   |-- validation.py                <- Quality validation engine
 |   |-- benchmark.py                 <- Metrics dataclass + CSV logger
 |   |-- main.py                      <- CLI entry point, orchestration loop
+|   |-- api.py                       <- FastAPI REST service
 ```
 
 ### How the Modules Connect
 
 ```
-main.py
-  |-- config.py          -> reads .env, resolves provider/model/api_key
-  |-- extractor.py       -> sends images to AI API, gets structured JSON
-  |   |-- config.py      -> loads schema.json
-  |   |-- models.py      -> validates JSON into PurchaseInvoice Pydantic model
-  |-- validation.py      -> runs quality checks on the PurchaseInvoice
-  |-- benchmark.py       -> collects metrics, writes CSV, prints summary
+main.py ──┐
+           ├──→ helpers.py (run_extraction_pipeline)
+api.py  ──┘         |
+                     |-- extractor.py  -> sends images to AI API, gets structured JSON
+                     |   |-- config.py -> reads .env, loads schema.json
+                     |   |-- models.py -> validates JSON into PurchaseInvoice Pydantic model
+                     |-- validation.py -> runs quality checks on the PurchaseInvoice
+                     |-- benchmark.py  -> collects metrics, writes CSV, prints summary
 ```
 
 ---
