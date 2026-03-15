@@ -1,34 +1,31 @@
 """FastAPI service for invoice extraction."""
 
 import asyncio
+import hashlib
+import json
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .benchmark import BenchmarkLogger, ExtractionMetrics, estimate_cost
+from .benchmark import BenchmarkLogger, ExtractionMetrics
 from .config import AI_PROVIDER, get_api_key, get_model
-from .extractor import extract_invoice
-from .helpers import (
-    SUPPORTED_EXTENSIONS,
-    avg_confidence,
-    count_populated_fields,
-    merge_with_confidence,
-)
-from .validation import validate_invoice
+from .helpers import SUPPORTED_EXTENSIONS, run_extraction_pipeline
 
 logger = logging.getLogger(__name__)
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _UPLOAD_DIR = _BASE_DIR / "uploads"
+_OUTPUT_DIR = _BASE_DIR / "output"
 _LOG_PATH = _BASE_DIR / "logs" / "benchmark.csv"
 
 
@@ -60,7 +57,11 @@ class Transaction:
     error: str | None = None
 
 
+_MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
+
 _transactions: dict[str, Transaction] = {}
+_hash_to_txn: dict[str, str] = {}  # file content SHA-256 → txn_id
+_background_tasks: set[asyncio.Task] = set()
 _lock = threading.Lock()
 
 
@@ -70,6 +71,8 @@ _lock = threading.Lock()
 class ExtractResponse(BaseModel):
     txn_id: str
     status: TransactionStatus
+    provider: str
+    model: str
     message: str
 
 
@@ -153,66 +156,20 @@ def _process_extraction(txn_id: str) -> None:
     )
 
     try:
-        invoice, result = extract_invoice(txn.file_path, provider, model, api_key)
+        result = run_extraction_pipeline(txn.file_path, provider, model, api_key, metrics)
 
-        invoice_data = invoice.model_dump(exclude_none=True)
-        merged = merge_with_confidence(invoice_data, result.confidence_scores)
-
-        # Fill metrics (same pipeline as main.py)
-        metrics.status = "success"
-        metrics.latency_seconds = round(result.latency_seconds, 2)
-        metrics.input_tokens = result.input_tokens
-        metrics.output_tokens = result.output_tokens
-        metrics.total_tokens = result.input_tokens + result.output_tokens
-        metrics.stop_reason = result.stop_reason
-        metrics.estimated_cost_usd = round(
-            estimate_cost(model, result.input_tokens, result.output_tokens), 6
-        )
-
-        metrics.items_count = len(invoice.items)
-        metrics.taxes_count = len(invoice.taxes) if invoice.taxes else 0
-        metrics.has_grand_total = invoice.grand_total is not None
-        metrics.has_supplier = bool(invoice.supplier)
-        metrics.fields_populated, metrics.fields_total = count_populated_fields(invoice)
-
-        vr = validate_invoice(invoice)
-        metrics.validation_score = vr.score_pct
-        metrics.validation_passed = vr.checks_passed
-        metrics.validation_total = vr.checks_total
-        metrics.validation_warnings = len(vr.warnings)
-        metrics.validation_errors = (
-            "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
-        )
-
-        avg_conf = avg_confidence(result.confidence_scores) if result.confidence_scores else None
-        if avg_conf is not None:
-            metrics.avg_confidence = avg_conf
-
-        validation_summary = {
-            "score_pct": vr.score_pct,
-            "checks_passed": vr.checks_passed,
-            "checks_total": vr.checks_total,
-            "warnings": vr.warnings,
-            "errors": vr.errors,
-        }
-        metrics_summary = {
-            "provider": provider,
-            "model": model,
-            "latency_seconds": metrics.latency_seconds,
-            "input_tokens": result.input_tokens,
-            "output_tokens": result.output_tokens,
-            "total_tokens": metrics.total_tokens,
-            "estimated_cost_usd": metrics.estimated_cost_usd,
-            "avg_confidence": avg_conf,
-        }
+        # Save result as JSON in output/ using original filename
+        out_name = Path(txn.file_name).stem + ".json"
+        out_path = _OUTPUT_DIR / out_name
+        out_path.write_text(json.dumps(result.merged, indent=2, ensure_ascii=False), encoding="utf-8")
 
         with _lock:
             txn.status = TransactionStatus.COMPLETED
             txn.completed_at = datetime.now(timezone.utc).isoformat()
-            txn.invoice_data = merged
-            txn.invoice_raw = invoice_data
-            txn.validation = validation_summary
-            txn.metrics = metrics_summary
+            txn.invoice_data = result.merged
+            txn.invoice_raw = result.invoice_raw
+            txn.validation = result.validation
+            txn.metrics = result.metrics_summary
 
     except Exception as e:
         metrics.status = "error"
@@ -224,6 +181,12 @@ def _process_extraction(txn_id: str) -> None:
 
     # Always log to benchmark CSV
     bench_logger.log(metrics)
+
+    # Clean up uploaded file — data is now in memory
+    try:
+        txn.file_path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Failed to clean up upload: %s", txn.file_path)
 
     # Fire webhook callback if configured
     if txn.callback_url and txn.status == TransactionStatus.COMPLETED:
@@ -262,17 +225,20 @@ async def _run_extraction(txn_id: str) -> None:
 # ── FastAPI app ──────────────────────────────────────────────────────
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    _UPLOAD_DIR.mkdir(exist_ok=True)
+    _OUTPUT_DIR.mkdir(exist_ok=True)
+    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    yield
+
+
 app = FastAPI(
     title="Invoice Extractor API",
     description="Extract structured invoice data from PDFs and images using AI Vision.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
-
-
-@app.on_event("startup")
-async def _startup():
-    _UPLOAD_DIR.mkdir(exist_ok=True)
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 @app.post("/extract", response_model=ExtractResponse)
@@ -289,9 +255,36 @@ async def extract(
             detail=f"Unsupported file type: {suffix}. Supported: {', '.join(SUPPORTED_EXTENSIONS)}",
         )
 
-    txn_id = uuid.uuid4().hex
-    upload_path = _UPLOAD_DIR / f"{txn_id}{suffix}"
     content = await file.read()
+    if len(content) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content) / 1024 / 1024:.1f} MB). Maximum: {_MAX_UPLOAD_SIZE / 1024 / 1024:.0f} MB.",
+        )
+
+    provider = AI_PROVIDER
+    model = get_model()
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    # Check if this exact file was already submitted (skip if previous attempt failed)
+    with _lock:
+        existing_txn_id = _hash_to_txn.get(file_hash)
+        if existing_txn_id and existing_txn_id in _transactions:
+            existing = _transactions[existing_txn_id]
+            if existing.status != TransactionStatus.FAILED:
+                return ExtractResponse(
+                    txn_id=existing.txn_id,
+                    status=existing.status,
+                    provider=provider,
+                    model=model,
+                    message=f"Duplicate document — returning existing transaction (status: {existing.status.value}).",
+                )
+            # Previous attempt failed — allow retry by removing stale entry
+            del _transactions[existing_txn_id]
+            del _hash_to_txn[file_hash]
+
+    txn_id = uuid.uuid4().hex
+    upload_path = _UPLOAD_DIR / (file.filename or f"{txn_id}{suffix}")
     upload_path.write_bytes(content)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -307,12 +300,17 @@ async def extract(
 
     with _lock:
         _transactions[txn_id] = txn
+        _hash_to_txn[file_hash] = txn_id
 
-    asyncio.create_task(_run_extraction(txn_id))
+    task = asyncio.create_task(_run_extraction(txn_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
     return ExtractResponse(
         txn_id=txn_id,
         status=TransactionStatus.QUEUED,
+        provider=provider,
+        model=model,
         message="Extraction queued. Poll GET /status/{txn_id} for progress.",
     )
 

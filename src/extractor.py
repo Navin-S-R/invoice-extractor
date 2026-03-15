@@ -399,6 +399,13 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
 
     num_ctx = _OLLAMA_NUM_CTX.get(model, _OLLAMA_NUM_CTX_DEFAULT)
 
+    # Disable thinking mode for qwen3 models — it generates thousands of
+    # internal reasoning tokens before the JSON, causing timeouts.
+    # /no_think makes it output the answer directly.
+    user_content = USER_PROMPT
+    if "qwen3" in model.lower():
+        user_content = "/no_think " + USER_PROMPT
+
     payload = {
         "model": model,
         "keep_alive": "10m",
@@ -408,7 +415,7 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
             {"role": "system", "content": system_with_schema},
             {
                 "role": "user",
-                "content": USER_PROMPT,
+                "content": user_content,
                 "images": image_b64_list,
             },
         ],
@@ -417,10 +424,10 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
     # Large models (32B+ with 64K ctx) can take several minutes to load
     # into VRAM and generate output.  Use generous per-phase timeouts:
     #   connect  = 120s  (model loading / cold start)
-    #   read     = 900s  (token generation for complex invoices)
+    #   read     = 1800s (token generation — qwen3 models can be slow)
     #   write    = 120s  (sending large base64 image payloads)
     #   pool     = 60s
-    timeout = httpx.Timeout(connect=120.0, read=900.0, write=120.0, pool=60.0)
+    timeout = httpx.Timeout(connect=120.0, read=1800.0, write=120.0, pool=60.0)
 
     start = time.perf_counter()
     with httpx.Client(timeout=timeout) as client:

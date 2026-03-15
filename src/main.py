@@ -6,11 +6,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .benchmark import BenchmarkLogger, ExtractionMetrics, estimate_cost
+from .benchmark import BenchmarkLogger, ExtractionMetrics
 from .config import AI_PROVIDER, get_api_key, get_model
-from .extractor import extract_invoice
-from .helpers import SUPPORTED_EXTENSIONS, avg_confidence as _avg_confidence, count_populated_fields, merge_with_confidence
-from .validation import validate_invoice
+from .helpers import SUPPORTED_EXTENSIONS, run_extraction_pipeline
 
 # Delay between files (seconds). Only applied after rate-limit errors;
 # otherwise no artificial delay is imposed.
@@ -111,59 +109,26 @@ def main():
         )
 
         try:
-            invoice, result = extract_invoice(file_path, provider, model, api_key)
+            result = run_extraction_pipeline(file_path, provider, model, api_key, metrics)
 
-            # Write JSON output with per-field confidence scores
-            invoice_data = invoice.model_dump(exclude_none=True)
-            output_data = merge_with_confidence(invoice_data, result.confidence_scores)
-
+            # Write JSON output
             output_file = output_dir / f"{file_path.stem}.json"
             output_file.write_text(
-                json.dumps(output_data, indent=2, ensure_ascii=False)
+                json.dumps(result.merged, indent=2, ensure_ascii=False)
             )
 
-            # Fill metrics from API response
-            metrics.status = "success"
-            metrics.latency_seconds = round(result.latency_seconds, 2)
-            metrics.input_tokens = result.input_tokens
-            metrics.output_tokens = result.output_tokens
-            metrics.total_tokens = result.input_tokens + result.output_tokens
-            metrics.stop_reason = result.stop_reason
-            metrics.estimated_cost_usd = round(
-                estimate_cost(model, result.input_tokens, result.output_tokens), 6
-            )
-
-            # Quality indicators
-            metrics.items_count = len(invoice.items)
-            metrics.taxes_count = len(invoice.taxes) if invoice.taxes else 0
-            metrics.has_grand_total = invoice.grand_total is not None
-            metrics.has_supplier = bool(invoice.supplier)
-            metrics.fields_populated, metrics.fields_total = count_populated_fields(invoice)
-
-            # Validation checks
-            vr = validate_invoice(invoice)
-            metrics.validation_score = vr.score_pct
-            metrics.validation_passed = vr.checks_passed
-            metrics.validation_total = vr.checks_total
-            metrics.validation_warnings = len(vr.warnings)
-            metrics.validation_errors = "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
-
-            # Compute average confidence from scores
-            avg_conf = _avg_confidence(result.confidence_scores) if result.confidence_scores else None
-            if avg_conf is not None:
-                metrics.avg_confidence = avg_conf
-            conf_str = f", confidence {avg_conf}%" if avg_conf is not None else ""
-
+            conf_str = f", confidence {result.avg_conf}%" if result.avg_conf is not None else ""
+            vr = result.validation
             print(
                 f"OK -> {output_file.name} "
                 f"({metrics.latency_seconds}s, {metrics.total_tokens} tokens, "
-                f"${metrics.estimated_cost_usd:.4f}, quality {vr.score_pct}%{conf_str})"
+                f"${metrics.estimated_cost_usd:.4f}, quality {vr['score_pct']}%{conf_str})"
             )
-            if vr.errors:
-                for err in vr.errors:
+            if vr["errors"]:
+                for err in vr["errors"]:
                     print(f"    ! {err}")
-            if vr.warnings:
-                for warn in vr.warnings:
+            if vr["warnings"]:
+                for warn in vr["warnings"]:
                     print(f"    ~ {warn}")
 
         except Exception as e:
