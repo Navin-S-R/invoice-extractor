@@ -6,11 +6,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .benchmark import BenchmarkLogger, ExtractionMetrics, estimate_cost
+from .benchmark import BenchmarkLogger, ExtractionMetrics
 from .config import AI_PROVIDER, get_api_key, get_model
-from .extractor import extract_invoice
-from .helpers import SUPPORTED_EXTENSIONS, avg_confidence as _avg_confidence, count_populated_fields, merge_with_confidence
-from .validation import validate_invoice
+from .helpers import SUPPORTED_EXTENSIONS, run_extraction_pipeline
 
 # Delay between files (seconds). Only applied after rate-limit errors;
 # otherwise no artificial delay is imposed.
@@ -18,173 +16,154 @@ _RATE_LIMIT_COOLDOWN = 5
 
 
 def get_files(input_dir: Path) -> list[Path]:
-    """Get all supported files from the input directory."""
-    files = []
-    for f in sorted(input_dir.iterdir()):
-        if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS:
-            files.append(f)
-    return files
+	"""Get all supported files from the input directory."""
+	files = []
+	for f in sorted(input_dir.iterdir()):
+		if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS:
+			files.append(f)
+	return files
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Extract structured invoice data from PDFs and images using AI Vision APIs."
-    )
-    base_dir = Path(__file__).resolve().parent.parent
-    parser.add_argument(
-        "input_dir", nargs="?", default=str(base_dir / "input"),
-        help="Directory containing invoice files (default: ./input)",
-    )
-    parser.add_argument(
-        "output_dir", nargs="?", default=str(base_dir / "output"),
-        help="Directory for JSON output (default: ./output)",
-    )
-    parser.add_argument(
-        "--file", "-f", dest="single_file", default=None,
-        help="Process a single file instead of the entire input directory",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="List files that would be processed without extracting",
-    )
-    return parser
+	parser = argparse.ArgumentParser(
+		description="Extract structured invoice data from PDFs and images using AI Vision APIs."
+	)
+	base_dir = Path(__file__).resolve().parent.parent
+	parser.add_argument(
+		"input_dir",
+		nargs="?",
+		default=str(base_dir / "input"),
+		help="Directory containing invoice files (default: ./input)",
+	)
+	parser.add_argument(
+		"output_dir",
+		nargs="?",
+		default=str(base_dir / "output"),
+		help="Directory for JSON output (default: ./output)",
+	)
+	parser.add_argument(
+		"--file",
+		"-f",
+		dest="single_file",
+		default=None,
+		help="Process a single file instead of the entire input directory",
+	)
+	parser.add_argument(
+		"--dry-run",
+		action="store_true",
+		help="List files that would be processed without extracting",
+	)
+	return parser
 
 
 def main():
-    parser = _build_parser()
-    args = parser.parse_args()
+	# Auto-update pricing (once per day, non-blocking on failure).
+	try:
+		from .update_pricing import update_pricing
 
-    base_dir = Path(__file__).resolve().parent.parent
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+		update_pricing()
+	except Exception:
+		pass  # pricing update is best-effort
 
-    input_dir.mkdir(exist_ok=True)
-    output_dir.mkdir(exist_ok=True)
+	parser = _build_parser()
+	args = parser.parse_args()
 
-    # Single-file mode
-    if args.single_file:
-        single = Path(args.single_file)
-        if not single.exists():
-            print(f"File not found: {single}")
-            return
-        if single.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            print(f"Unsupported file type: {single.suffix}")
-            return
-        files = [single]
-    else:
-        files = get_files(input_dir)
+	base_dir = Path(__file__).resolve().parent.parent
+	input_dir = Path(args.input_dir)
+	output_dir = Path(args.output_dir)
 
-    if not files:
-        print(f"No supported files found in {input_dir}")
-        print(f"Supported formats: {', '.join(SUPPORTED_EXTENSIONS)}")
-        return
+	input_dir.mkdir(exist_ok=True)
+	output_dir.mkdir(exist_ok=True)
 
-    # Dry-run: just list files and exit
-    if args.dry_run:
-        print(f"Would process {len(files)} file(s):")
-        for f in files:
-            print(f"  - {f.name}")
-        return
+	# Single-file mode
+	if args.single_file:
+		single = Path(args.single_file)
+		if not single.exists():
+			print(f"File not found: {single}")
+			return
+		if single.suffix.lower() not in SUPPORTED_EXTENSIONS:
+			print(f"Unsupported file type: {single.suffix}")
+			return
+		files = [single]
+	else:
+		files = get_files(input_dir)
 
-    provider = AI_PROVIDER
-    model = get_model()
-    api_key = get_api_key()
+	if not files:
+		print(f"No supported files found in {input_dir}")
+		print(f"Supported formats: {', '.join(SUPPORTED_EXTENSIONS)}")
+		return
 
-    # Set up benchmark logging
-    log_path = base_dir / "logs" / "benchmark.csv"
-    logger = BenchmarkLogger(log_path)
+	# Dry-run: just list files and exit
+	if args.dry_run:
+		print(f"Would process {len(files)} file(s):")
+		for f in files:
+			print(f"  - {f.name}")
+		return
 
-    print(f"Provider: {provider} | Model: {model}")
-    print(f"Found {len(files)} file(s) in {input_dir}\n")
+	provider = AI_PROVIDER
+	model = get_model()
+	api_key = get_api_key()
 
-    all_metrics: list[ExtractionMetrics] = []
-    was_rate_limited = False
+	# Set up benchmark logging
+	log_path = base_dir / "logs" / "benchmark.csv"
+	logger = BenchmarkLogger(log_path)
 
-    for i, file_path in enumerate(files, 1):
-        print(f"[{i}/{len(files)}] Processing: {file_path.name}...", end=" ", flush=True)
+	print(f"Provider: {provider} | Model: {model}")
+	print(f"Found {len(files)} file(s) in {input_dir}\n")
 
-        metrics = ExtractionMetrics(
-            file_name=file_path.name,
-            provider=provider,
-            model=model,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
+	all_metrics: list[ExtractionMetrics] = []
+	was_rate_limited = False
 
-        try:
-            invoice, result = extract_invoice(file_path, provider, model, api_key)
+	for i, file_path in enumerate(files, 1):
+		print(f"[{i}/{len(files)}] Processing: {file_path.name}...", end=" ", flush=True)
 
-            # Write JSON output with per-field confidence scores
-            invoice_data = invoice.model_dump(exclude_none=True)
-            output_data = merge_with_confidence(invoice_data, result.confidence_scores)
+		metrics = ExtractionMetrics(
+			file_name=file_path.name,
+			provider=provider,
+			model=model,
+			timestamp=datetime.now(timezone.utc).isoformat(),
+		)
 
-            output_file = output_dir / f"{file_path.stem}.json"
-            output_file.write_text(
-                json.dumps(output_data, indent=2, ensure_ascii=False)
-            )
+		try:
+			result = run_extraction_pipeline(file_path, provider, model, api_key, metrics)
 
-            # Fill metrics from API response
-            metrics.status = "success"
-            metrics.latency_seconds = round(result.latency_seconds, 2)
-            metrics.input_tokens = result.input_tokens
-            metrics.output_tokens = result.output_tokens
-            metrics.total_tokens = result.input_tokens + result.output_tokens
-            metrics.stop_reason = result.stop_reason
-            metrics.estimated_cost_usd = round(
-                estimate_cost(model, result.input_tokens, result.output_tokens), 6
-            )
+			# Write JSON output
+			output_file = output_dir / f"{file_path.stem}.json"
+			output_file.write_text(json.dumps(result.merged, indent=2, ensure_ascii=False))
 
-            # Quality indicators
-            metrics.items_count = len(invoice.items)
-            metrics.taxes_count = len(invoice.taxes) if invoice.taxes else 0
-            metrics.has_grand_total = invoice.grand_total is not None
-            metrics.has_supplier = bool(invoice.supplier)
-            metrics.fields_populated, metrics.fields_total = count_populated_fields(invoice)
+			conf_str = f", confidence {result.avg_conf}%" if result.avg_conf is not None else ""
+			vr = result.validation
+			print(
+				f"OK -> {output_file.name} "
+				f"({metrics.latency_seconds}s, {metrics.total_tokens} tokens, "
+				f"${metrics.estimated_cost_usd:.4f}, quality {vr['score_pct']}%{conf_str})"
+			)
+			if vr["errors"]:
+				for err in vr["errors"]:
+					print(f"    ! {err}")
+			if vr["warnings"]:
+				for warn in vr["warnings"]:
+					print(f"    ~ {warn}")
 
-            # Validation checks
-            vr = validate_invoice(invoice)
-            metrics.validation_score = vr.score_pct
-            metrics.validation_passed = vr.checks_passed
-            metrics.validation_total = vr.checks_total
-            metrics.validation_warnings = len(vr.warnings)
-            metrics.validation_errors = "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
+		except Exception as e:
+			metrics.status = "error"
+			metrics.error_message = str(e)
+			print(f"FAILED: {e}")
+			# Cool down after errors that may indicate rate limiting
+			err_lower = str(e).lower()
+			if "429" in err_lower or "rate" in err_lower or "overloaded" in err_lower:
+				was_rate_limited = True
 
-            # Compute average confidence from scores
-            avg_conf = _avg_confidence(result.confidence_scores) if result.confidence_scores else None
-            if avg_conf is not None:
-                metrics.avg_confidence = avg_conf
-            conf_str = f", confidence {avg_conf}%" if avg_conf is not None else ""
+		logger.log(metrics)
+		all_metrics.append(metrics)
 
-            print(
-                f"OK -> {output_file.name} "
-                f"({metrics.latency_seconds}s, {metrics.total_tokens} tokens, "
-                f"${metrics.estimated_cost_usd:.4f}, quality {vr.score_pct}%{conf_str})"
-            )
-            if vr.errors:
-                for err in vr.errors:
-                    print(f"    ! {err}")
-            if vr.warnings:
-                for warn in vr.warnings:
-                    print(f"    ~ {warn}")
+		# Only delay after rate-limit errors to avoid unnecessary waits
+		if i < len(files) and was_rate_limited:
+			time.sleep(_RATE_LIMIT_COOLDOWN)
+			was_rate_limited = False
 
-        except Exception as e:
-            metrics.status = "error"
-            metrics.error_message = str(e)
-            print(f"FAILED: {e}")
-            # Cool down after errors that may indicate rate limiting
-            err_lower = str(e).lower()
-            if "429" in err_lower or "rate" in err_lower or "overloaded" in err_lower:
-                was_rate_limited = True
-
-        logger.log(metrics)
-        all_metrics.append(metrics)
-
-        # Only delay after rate-limit errors to avoid unnecessary waits
-        if i < len(files) and was_rate_limited:
-            time.sleep(_RATE_LIMIT_COOLDOWN)
-            was_rate_limited = False
-
-    logger.print_summary(all_metrics)
+	logger.print_summary(all_metrics)
 
 
 if __name__ == "__main__":
-    main()
+	main()
