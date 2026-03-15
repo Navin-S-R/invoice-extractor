@@ -1,6 +1,7 @@
 """Benchmark metrics collection and CSV logging."""
 
 import csv
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -48,38 +49,53 @@ class ExtractionMetrics:
 	timestamp: str = ""
 
 
-# Approximate pricing per 1M tokens (USD) as of 2026-03
-_PRICING = {
+# Fallback pricing per 1M tokens (USD) — used when pricing.json is missing.
+_FALLBACK_PRICING = {
 	# (input_per_1M, output_per_1M)
-	# Anthropic
 	"claude-sonnet-4-6": (3.00, 15.00),
 	"claude-opus-4-6": (5.00, 25.00),
 	"claude-haiku-4-5": (1.00, 5.00),
-	# OpenAI — current
-	"gpt-5.4": (2.50, 20.00),
-	"gpt-5": (0.625, 5.00),
+	"gpt-5.4": (2.50, 15.00),
+	"gpt-5": (1.25, 10.00),
 	"gpt-5.2": (1.75, 14.00),
-	# OpenAI — legacy
 	"gpt-4o": (2.50, 10.00),
 	"gpt-4o-mini": (0.15, 0.60),
 	"gpt-4.1": (2.00, 8.00),
 	"gpt-4.1-mini": (0.40, 1.60),
 	"gpt-4.1-nano": (0.10, 0.40),
-	# Google — current
 	"gemini-3-flash-preview": (0.50, 3.00),
 	"gemini-3-pro-preview": (2.00, 12.00),
 	"gemini-3.1-pro-preview": (2.00, 12.00),
-	# Google — legacy
 	"gemini-2.5-pro": (1.25, 10.00),
-	"gemini-2.5-flash": (0.15, 0.60),
+	"gemini-2.5-flash": (0.30, 2.50),
 	"gemini-2.0-flash": (0.10, 0.40),
-	# Ollama / local models — no API cost
 	"qwen2.5vl:7b": (0.0, 0.0),
 	"qwen2.5vl:32b": (0.0, 0.0),
 	"gemma3:27b": (0.0, 0.0),
 	"qwen3:8b": (0.0, 0.0),
 	"qwen3-vl:32b": (0.0, 0.0),
 }
+
+_PRICING_FILE = Path(__file__).resolve().parent.parent / "pricing.json"
+_pricing_cache: dict[str, tuple[float, float]] | None = None
+
+
+def _load_pricing() -> dict[str, tuple[float, float]]:
+	"""Load pricing from pricing.json, falling back to hardcoded values."""
+	global _pricing_cache
+	if _pricing_cache is not None:
+		return _pricing_cache
+
+	if _PRICING_FILE.exists():
+		try:
+			data = json.loads(_PRICING_FILE.read_text())
+			_pricing_cache = {k: (v[0], v[1]) for k, v in data.items() if not k.startswith("_") and isinstance(v, list)}
+			return _pricing_cache
+		except (json.JSONDecodeError, KeyError, IndexError):
+			pass
+
+	_pricing_cache = _FALLBACK_PRICING
+	return _pricing_cache
 
 
 _warned_models: set[str] = set()
@@ -88,15 +104,18 @@ _warned_models: set[str] = set()
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 	"""Estimate cost in USD based on token usage.
 
-	Returns 0.0 and prints a warning if the model is not in the pricing table.
+	Reads from pricing.json (updated by `python -m src.update_pricing`).
+	Falls back to hardcoded pricing if pricing.json is missing.
+	Returns 0.0 and prints a warning if the model is not found.
 	"""
-	pricing = _PRICING.get(model)
+	pricing_table = _load_pricing()
+	pricing = pricing_table.get(model)
 	if not pricing:
 		if model not in _warned_models:
 			_warned_models.add(model)
 			print(
 				f"    [warn] No pricing data for model '{model}' — "
-				f"cost estimates will show $0. Update _PRICING in benchmark.py."
+				f"cost estimates will show $0. Run: python -m src.update_pricing"
 			)
 		return 0.0
 	input_rate, output_rate = pricing

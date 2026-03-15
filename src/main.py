@@ -57,6 +57,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+	# Auto-update pricing (once per day, non-blocking on failure).
+	try:
+		from .update_pricing import update_pricing
+
+		update_pricing()
+	except Exception:
+		pass  # pricing update is best-effort
+
 	parser = _build_parser()
 	args = parser.parse_args()
 
