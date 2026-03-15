@@ -108,6 +108,13 @@ That's it. JSON output appears in `output/`, metrics in `logs/benchmark.csv`.
 | `gemini-2.5-flash`       | $0.15  | $0.60   |
 | Ollama models            | Free   | Free    |
 
+> **Pricing is auto-updated daily** from [litellm's pricing dataset](https://github.com/BerriAI/litellm). On each CLI run, `pricing.json` is refreshed (at most once per day). You can also update manually:
+> ```bash
+> python -m src.update_pricing          # skip if already updated today
+> python -m src.update_pricing --force  # force refresh
+> ```
+> To add a new model, add its key to `_MODEL_MAP` in `src/update_pricing.py`.
+
 ---
 
 ## Usage
@@ -525,6 +532,7 @@ invoice-extractor/
 |   |-- helpers.py                   <- Shared pipeline: run_extraction_pipeline()
 |   |-- validation.py                <- Quality validation engine
 |   |-- benchmark.py                 <- Metrics dataclass + CSV logger
+|   |-- update_pricing.py            <- Auto-fetch model pricing from litellm
 |   |-- main.py                      <- CLI entry point, orchestration loop
 |   |-- api.py                       <- FastAPI REST service
 ```

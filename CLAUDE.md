@@ -26,6 +26,7 @@ src/
 ├── helpers.py       — Shared pipeline: run_extraction_pipeline(), merge_with_confidence(), etc.
 ├── validation.py    — 16 categories of anti-hallucination quality checks
 ├── benchmark.py     — ExtractionMetrics dataclass, CSV logging, cost estimation
+├── update_pricing.py— Auto-fetch latest model pricing from litellm (daily)
 ├── main.py          — CLI entry point (batch file processing)
 └── api.py           — FastAPI service (upload → async extract → poll/webhook)
 ```
@@ -49,6 +50,9 @@ api.py  ──┘                                          ──→ models.py
   Failed extractions are automatically retried on re-upload.
 - **Ollama per-model context**: `_OLLAMA_NUM_CTX` dict in `extractor.py` sizes context windows
   per model based on 64GB VRAM budget (model weights + KV cache).
+- **Auto-updated pricing**: `update_pricing.py` fetches latest model pricing from litellm's
+  dataset daily, cached in `pricing.json`. Runs automatically on each CLI invocation.
+  Fallback to hardcoded `_FALLBACK_PRICING` in `benchmark.py` if fetch fails.
 
 ## Directory Layout
 
@@ -57,6 +61,7 @@ input/       — Source invoice PDFs/images (gitignored)
 output/      — Extracted JSON results (gitignored)
 uploads/     — Temporary API uploads, cleaned after extraction (gitignored)
 logs/        — benchmark.csv with extraction metrics (gitignored)
+pricing.json — Cached model pricing from litellm (auto-updated daily)
 prompt.txt   — System prompt sent to AI models
 ```
 
@@ -126,6 +131,8 @@ AI_PROVIDER=google AI_MODEL=gemini-3-flash-preview python -m src.main -f "input/
 - Type hints on all function signatures
 - Provider-specific SDK imports are lazy (inside functions) to avoid requiring all SDKs
 - `httpx` for Ollama native API calls (not openai-compat)
-- Timeouts: `httpx.Timeout(connect=120, read=900, write=120, pool=60)` for large Ollama models
+- Timeouts: `httpx.Timeout(connect=120, read=1800, write=120, pool=60)` for large Ollama models
 - Validation warnings use `~` prefix, errors use `!` prefix in CLI output
-- Cost estimation uses `_PRICING` dict in `benchmark.py` — update when adding new models
+- Cost estimation reads from `pricing.json` (auto-updated daily from litellm)
+- To add a new model's pricing, add it to `_MODEL_MAP` in `update_pricing.py` then run `python -m src.update_pricing --force`
+- Pre-commit hooks enforce conventional commits, ruff formatting (tabs, double quotes), and block direct commits to `develop`
