@@ -1,0 +1,32 @@
+# See https://pre-commit.com for more information
+repos:
+  # ── Standard hooks ────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # ── Ruff (linter + formatter) ─────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  # ── Block direct push to develop ──────────────────────────────
+  - repo: local
+    hooks:
+      - id: no-push-to-develop
+        name: Block direct push to develop
+        entry: scripts/no-push-to-develop.sh
+        language: script
+        stages: [pre-push]
+        always_run: true

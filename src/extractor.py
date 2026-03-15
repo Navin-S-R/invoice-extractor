@@ -8,19 +8,21 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from .config import get_schema, get_system_prompt, OLLAMA_BASE_URL
+from .config import OLLAMA_BASE_URL, get_schema, get_system_prompt
 from .models import PurchaseInvoice
 
 
 @dataclass
 class ExtractionResult:
     """Raw extraction output with API response metadata."""
+
     data: dict
     confidence_scores: dict | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     stop_reason: str = ""
     latency_seconds: float = 0.0
+
 
 USER_PROMPT = """
 Extract all invoice data from the provided document image.
@@ -31,6 +33,7 @@ Return a JSON object with two keys:
 
 Ensure the output contains only valid JSON.
 """
+
 
 def _parse_json_robust(raw_text: str) -> dict:
     """Parse JSON from model output, handling common malformed responses.
@@ -47,7 +50,7 @@ def _parse_json_robust(raw_text: str) -> dict:
     if text.startswith("```"):
         # Remove opening fence (```json or ```)
         first_newline = text.index("\n") if "\n" in text else len(text)
-        text = text[first_newline + 1:]
+        text = text[first_newline + 1 :]
         # Remove closing fence
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3].rstrip()
@@ -62,7 +65,7 @@ def _parse_json_robust(raw_text: str) -> dict:
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        candidate = text[start:end + 1]
+        candidate = text[start : end + 1]
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
@@ -70,6 +73,7 @@ def _parse_json_robust(raw_text: str) -> dict:
 
         # Try fixing trailing commas: ,} or ,]
         import re
+
         fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
         try:
             return json.loads(fixed)
@@ -77,19 +81,20 @@ def _parse_json_robust(raw_text: str) -> dict:
             pass
 
     # Nothing worked — raise with the original text for debugging
-    raise ValueError(
-        f"Failed to parse JSON from model output. "
-        f"Raw text (first 500 chars): {raw_text[:500]}"
-    )
+    raise ValueError(f"Failed to parse JSON from model output. Raw text (first 500 chars): {raw_text[:500]}")
 
 
 _MAX_IMAGE_BYTES = 4_800_000  # stay under Anthropic's 5MB limit
+
+
 def _resize_if_needed(img_bytes: bytes, media_type: str) -> tuple[bytes, str]:
     """Shrink image if it exceeds the API size limit. Returns JPEG to save space."""
     if len(img_bytes) <= _MAX_IMAGE_BYTES:
         return img_bytes, media_type
     from io import BytesIO
+
     from PIL import Image
+
     img = Image.open(BytesIO(img_bytes))
     # Progressively reduce until under limit
     for quality in (85, 70, 55, 40):
@@ -153,6 +158,7 @@ def _prepare_anthropic_schema(schema: dict) -> dict:
       — must use {"anyOf": [{"type": "string"}, {"type": "null"}]}
     """
     import copy
+
     schema = copy.deepcopy(schema)
 
     def _patch(node: dict):
@@ -206,10 +212,12 @@ def _extract_anthropic(file_path: Path, model: str, api_key: str, schema: dict) 
     content: list[dict] = []
     for img_bytes, media_type in images:
         b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": media_type, "data": b64},
-        })
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": b64},
+            }
+        )
     content.append({"type": "text", "text": USER_PROMPT})
 
     # Anthropic's output_config structured output has strict schema limits.
@@ -217,8 +225,7 @@ def _extract_anthropic(file_path: Path, model: str, api_key: str, schema: dict) 
     schema_text = json.dumps(schema, indent=2)
     system_prompt = get_system_prompt()
     system_with_schema = (
-        system_prompt
-        + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
+        system_prompt + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
     )
 
     start = time.perf_counter()
@@ -250,10 +257,12 @@ def _extract_openai(file_path: Path, model: str, api_key: str, schema: dict) -> 
     image_inputs = []
     for img_bytes, media_type in images:
         b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
-        image_inputs.append({
-            "type": "input_image",
-            "image_url": f"data:{media_type};base64,{b64}",
-        })
+        image_inputs.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:{media_type};base64,{b64}",
+            }
+        )
 
     system_prompt = get_system_prompt()
     start = time.perf_counter()
@@ -293,6 +302,7 @@ def _prepare_google_schema(schema: dict) -> dict:
     Converts {"type": ["string", "null"]} to {"type": "STRING", "nullable": true}.
     """
     import copy
+
     schema = copy.deepcopy(schema)
 
     def _patch(node):
@@ -304,7 +314,7 @@ def _prepare_google_schema(schema: dict) -> dict:
             node["type"] = non_null[0] if non_null else "string"
             if "null" in t:
                 node["nullable"] = True
-        for key, value in list(node.items()):
+        for _key, value in list(node.items()):
             if isinstance(value, dict):
                 _patch(value)
             elif isinstance(value, list):
@@ -332,8 +342,7 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
     system_prompt = get_system_prompt()
     schema_text = json.dumps(schema, indent=2)
     system_with_schema = (
-        system_prompt
-        + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
+        system_prompt + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
     )
     start = time.perf_counter()
     response = client.models.generate_content(
@@ -366,10 +375,10 @@ def _extract_google(file_path: Path, model: str, api_key: str, schema: dict) -> 
 # Per-model context window sizes for Ollama.
 # Sized for a 64GB RAM machine — balances context capacity vs KV cache memory.
 _OLLAMA_NUM_CTX = {
-    "qwen3-vl:32b": 65536,     # 128K native, ~16GB KV cache
-    "qwen2.5vl:32b": 32768,    # 32K native,  ~8GB KV cache
-    "qwen2.5vl:7b": 32768,     # 32K native,  ~4GB KV cache
-    "gemma3:27b": 65536,        # 128K native, ~14GB KV cache
+    "qwen3-vl:32b": 65536,  # 128K native, ~16GB KV cache
+    "qwen2.5vl:32b": 32768,  # 32K native,  ~8GB KV cache
+    "qwen2.5vl:7b": 32768,  # 32K native,  ~4GB KV cache
+    "gemma3:27b": 65536,  # 128K native, ~14GB KV cache
 }
 _OLLAMA_NUM_CTX_DEFAULT = 32768
 
@@ -387,15 +396,11 @@ def _extract_ollama(file_path: Path, model: str, api_key: str, schema: dict) -> 
     system_prompt = get_system_prompt()
     schema_text = json.dumps(schema, indent=2)
     system_with_schema = (
-        system_prompt
-        + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
+        system_prompt + f"\n\nJSON SCHEMA (your output MUST conform to this):\n```json\n{schema_text}\n```"
     )
 
     # Ollama native format: images are raw base64 strings (no data-uri prefix)
-    image_b64_list = [
-        base64.standard_b64encode(img_bytes).decode("utf-8")
-        for img_bytes, _ in images
-    ]
+    image_b64_list = [base64.standard_b64encode(img_bytes).decode("utf-8") for img_bytes, _ in images]
 
     num_ctx = _OLLAMA_NUM_CTX.get(model, _OLLAMA_NUM_CTX_DEFAULT)
 
@@ -500,7 +505,11 @@ def extract_invoice(
             is_rate_limit = "429" in err_str or "rate" in err_str or "overloaded" in err_str
             if is_rate_limit and attempt < _MAX_RETRIES:
                 wait = _RETRY_BACKOFF[attempt]
-                print(f"\n    Rate limited, retrying in {wait}s (attempt {attempt + 2}/{_MAX_RETRIES + 1})...", end=" ", flush=True)
+                print(
+                    f"\n    Rate limited, retrying in {wait}s (attempt {attempt + 2}/{_MAX_RETRIES + 1})...",
+                    end=" ",
+                    flush=True,
+                )
                 time.sleep(wait)
                 last_err = e
             else:
@@ -531,14 +540,13 @@ def _coerce_nulls(data: dict, schema: dict):
         elif prop_type == "object" and data[key] is None:
             data[key] = {}
         # Array of objects — recurse into each item
-        elif prop_type == "array" and isinstance(data[key], list):
-            item_schema = prop.get("items", {})
-            if item_schema.get("type") == "object":
-                for item_data in data[key]:
-                    if isinstance(item_data, dict):
-                        _coerce_nulls(item_data, item_schema)
-        # Nullable array — same but check for list type
-        elif isinstance(prop_type, list) and "array" in prop_type and isinstance(data[key], list):
+        elif (
+            prop_type == "array"
+            and isinstance(data[key], list)
+            or isinstance(prop_type, list)
+            and "array" in prop_type
+            and isinstance(data[key], list)
+        ):
             item_schema = prop.get("items", {})
             if item_schema.get("type") == "object":
                 for item_data in data[key]:

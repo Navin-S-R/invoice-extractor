@@ -210,9 +210,7 @@ def _send_webhook(txn: Transaction) -> None:
         }
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(txn.callback_url, json=payload)
-            logger.info(
-                "Webhook sent to %s — status %d", txn.callback_url, resp.status_code
-            )
+            logger.info("Webhook sent to %s — status %d", txn.callback_url, resp.status_code)
     except Exception as e:
         logger.warning("Webhook to %s failed: %s", txn.callback_url, e)
 
@@ -243,9 +241,9 @@ app = FastAPI(
 
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(
-    file: UploadFile = File(...),
-    document_type: str = Form(default="Purchase Invoice"),
-    callback_url: str | None = Form(default=None),
+    file: UploadFile = File(),  # noqa: B008
+    document_type: str = Form(default="Purchase Invoice"),  # noqa: B008
+    callback_url: str | None = Form(default=None),  # noqa: B008
 ):
     """Upload an invoice file and start extraction. Returns a transaction ID immediately."""
     suffix = Path(file.filename or "unknown").suffix.lower()

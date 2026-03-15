@@ -15,10 +15,7 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
 AI_MODEL = os.getenv("AI_MODEL", "claude-sonnet-4-6")
 
 if AI_PROVIDER not in _VALID_PROVIDERS:
-    raise ValueError(
-        f"Invalid AI_PROVIDER='{AI_PROVIDER}'. "
-        f"Must be one of: {', '.join(sorted(_VALID_PROVIDERS))}"
-    )
+    raise ValueError(f"Invalid AI_PROVIDER='{AI_PROVIDER}'. Must be one of: {', '.join(sorted(_VALID_PROVIDERS))}")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -52,21 +49,16 @@ def get_model() -> str:
 def get_schema() -> dict:
     """Load the JSON schema from the configured path."""
     import json
+
     if not SCHEMA_PATH.exists():
-        raise FileNotFoundError(
-            f"Schema file not found: {SCHEMA_PATH}\n"
-            f"Create one or set SCHEMA_PATH in .env"
-        )
+        raise FileNotFoundError(f"Schema file not found: {SCHEMA_PATH}\nCreate one or set SCHEMA_PATH in .env")
     return json.loads(SCHEMA_PATH.read_text())
 
 
 def get_system_prompt() -> str:
     """Load the system prompt from the configured path."""
     if not PROMPT_PATH.exists():
-        raise FileNotFoundError(
-            f"Prompt file not found: {PROMPT_PATH}\n"
-            f"Create one or set PROMPT_PATH in .env"
-        )
+        raise FileNotFoundError(f"Prompt file not found: {PROMPT_PATH}\nCreate one or set PROMPT_PATH in .env")
     return PROMPT_PATH.read_text().strip()
 
 
@@ -84,8 +76,5 @@ def get_api_key() -> str:
     }
     key = keys.get(AI_PROVIDER, "")
     if not key:
-        raise ValueError(
-            f"No API key set for provider '{AI_PROVIDER}'. "
-            f"Set the corresponding key in .env"
-        )
+        raise ValueError(f"No API key set for provider '{AI_PROVIDER}'. Set the corresponding key in .env")
     return key

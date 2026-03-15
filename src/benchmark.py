@@ -1,8 +1,7 @@
 """Benchmark metrics collection and CSV logging."""
 
 import csv
-import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
@@ -53,33 +52,33 @@ class ExtractionMetrics:
 _PRICING = {
     # (input_per_1M, output_per_1M)
     # Anthropic
-    "claude-sonnet-4-6":        (3.00, 15.00),
-    "claude-opus-4-6":          (5.00, 25.00),
-    "claude-haiku-4-5":         (1.00, 5.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-haiku-4-5": (1.00, 5.00),
     # OpenAI — current
-    "gpt-5.4":                  (2.50, 20.00),
-    "gpt-5":                    (0.625, 5.00),
-    "gpt-5.2":                  (1.75, 14.00),
+    "gpt-5.4": (2.50, 20.00),
+    "gpt-5": (0.625, 5.00),
+    "gpt-5.2": (1.75, 14.00),
     # OpenAI — legacy
-    "gpt-4o":                   (2.50, 10.00),
-    "gpt-4o-mini":              (0.15, 0.60),
-    "gpt-4.1":                  (2.00, 8.00),
-    "gpt-4.1-mini":             (0.40, 1.60),
-    "gpt-4.1-nano":             (0.10, 0.40),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
     # Google — current
-    "gemini-3-flash-preview":   (0.50, 3.00),
-    "gemini-3-pro-preview":     (2.00, 12.00),
-    "gemini-3.1-pro-preview":   (2.00, 12.00),
+    "gemini-3-flash-preview": (0.50, 3.00),
+    "gemini-3-pro-preview": (2.00, 12.00),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
     # Google — legacy
-    "gemini-2.5-pro":           (1.25, 10.00),
-    "gemini-2.5-flash":         (0.15, 0.60),
-    "gemini-2.0-flash":         (0.10, 0.40),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash": (0.15, 0.60),
+    "gemini-2.0-flash": (0.10, 0.40),
     # Ollama / local models — no API cost
-    "qwen2.5vl:7b":             (0.0, 0.0),
-    "qwen2.5vl:32b":            (0.0, 0.0),
-    "gemma3:27b":               (0.0, 0.0),
-    "qwen3:8b":                 (0.0, 0.0),
-    "qwen3-vl:32b":             (0.0, 0.0),
+    "qwen2.5vl:7b": (0.0, 0.0),
+    "qwen2.5vl:32b": (0.0, 0.0),
+    "gemma3:27b": (0.0, 0.0),
+    "qwen3:8b": (0.0, 0.0),
+    "qwen3-vl:32b": (0.0, 0.0),
 }
 
 
@@ -108,14 +107,30 @@ class BenchmarkLogger:
     """Append extraction metrics to a CSV log file."""
 
     CSV_FIELDS = [
-        "timestamp", "file_name", "provider", "model", "status",
-        "latency_seconds", "input_tokens", "output_tokens", "total_tokens",
-        "estimated_cost_usd", "items_count", "taxes_count",
-        "has_grand_total", "has_supplier", "fields_populated", "fields_total",
-        "validation_score", "validation_passed", "validation_total",
-        "validation_warnings", "validation_errors",
+        "timestamp",
+        "file_name",
+        "provider",
+        "model",
+        "status",
+        "latency_seconds",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "estimated_cost_usd",
+        "items_count",
+        "taxes_count",
+        "has_grand_total",
+        "has_supplier",
+        "fields_populated",
+        "fields_total",
+        "validation_score",
+        "validation_passed",
+        "validation_total",
+        "validation_warnings",
+        "validation_errors",
         "avg_confidence",
-        "stop_reason", "error_message",
+        "stop_reason",
+        "error_message",
     ]
 
     def __init__(self, log_path: Path):

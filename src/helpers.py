@@ -35,7 +35,7 @@ def avg_confidence(scores: dict | list | None) -> int | None:
         elif isinstance(obj, list):
             for item in obj:
                 _collect(item)
-        elif isinstance(obj, (int, float)):
+        elif isinstance(obj, int | float):
             values.append(int(obj))
 
     _collect(scores)
@@ -75,20 +75,22 @@ def merge_with_confidence(data: dict, scores: dict | None) -> dict:
                         if isinstance(item, dict) and isinstance(item_score, dict):
                             merged_list.append(_merge(item, item_score))
                         else:
-                            merged_list.append({
-                                "value": item,
-                                "confidence_score": item_score if isinstance(item_score, (int, float)) else 0,
-                            })
+                            merged_list.append(
+                                {
+                                    "value": item,
+                                    "confidence_score": item_score if isinstance(item_score, int | float) else 0,
+                                }
+                            )
                     result[key] = merged_list
                 else:
                     # Leaf value
                     result[key] = {
                         "value": val,
-                        "confidence_score": score_val if isinstance(score_val, (int, float)) else 0,
+                        "confidence_score": score_val if isinstance(score_val, int | float) else 0,
                     }
             return result
         # Fallback: data without matching scores
-        return {"value": d, "confidence_score": s if isinstance(s, (int, float)) else 0}
+        return {"value": d, "confidence_score": s if isinstance(s, int | float) else 0}
 
     return _merge(data, scores)
 
@@ -96,10 +98,11 @@ def merge_with_confidence(data: dict, scores: dict | None) -> dict:
 @dataclass
 class PipelineResult:
     """Result of running the extraction + validation + metrics pipeline."""
-    merged: dict          # Invoice data merged with confidence scores
-    invoice_raw: dict     # Plain invoice data (no confidence)
-    validation: dict      # {score_pct, checks_passed, checks_total, warnings, errors}
-    metrics_summary: dict # {provider, model, latency, tokens, cost, confidence}
+
+    merged: dict  # Invoice data merged with confidence scores
+    invoice_raw: dict  # Plain invoice data (no confidence)
+    validation: dict  # {score_pct, checks_passed, checks_total, warnings, errors}
+    metrics_summary: dict  # {provider, model, latency, tokens, cost, confidence}
     avg_conf: int | None  # Average confidence score
 
 
@@ -131,9 +134,7 @@ def run_extraction_pipeline(
     metrics.output_tokens = result.output_tokens
     metrics.total_tokens = result.input_tokens + result.output_tokens
     metrics.stop_reason = result.stop_reason
-    metrics.estimated_cost_usd = round(
-        estimate_cost(model, result.input_tokens, result.output_tokens), 6
-    )
+    metrics.estimated_cost_usd = round(estimate_cost(model, result.input_tokens, result.output_tokens), 6)
 
     metrics.items_count = len(invoice.items)
     metrics.taxes_count = len(invoice.taxes) if invoice.taxes else 0
@@ -146,9 +147,7 @@ def run_extraction_pipeline(
     metrics.validation_passed = vr.checks_passed
     metrics.validation_total = vr.checks_total
     metrics.validation_warnings = len(vr.warnings)
-    metrics.validation_errors = (
-        "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
-    )
+    metrics.validation_errors = "; ".join(vr.errors + vr.warnings) if (vr.errors or vr.warnings) else ""
 
     avg_conf = avg_confidence(result.confidence_scores) if result.confidence_scores else None
     if avg_conf is not None:

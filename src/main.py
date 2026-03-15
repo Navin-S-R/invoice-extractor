@@ -30,19 +30,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     base_dir = Path(__file__).resolve().parent.parent
     parser.add_argument(
-        "input_dir", nargs="?", default=str(base_dir / "input"),
+        "input_dir",
+        nargs="?",
+        default=str(base_dir / "input"),
         help="Directory containing invoice files (default: ./input)",
     )
     parser.add_argument(
-        "output_dir", nargs="?", default=str(base_dir / "output"),
+        "output_dir",
+        nargs="?",
+        default=str(base_dir / "output"),
         help="Directory for JSON output (default: ./output)",
     )
     parser.add_argument(
-        "--file", "-f", dest="single_file", default=None,
+        "--file",
+        "-f",
+        dest="single_file",
+        default=None,
         help="Process a single file instead of the entire input directory",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="List files that would be processed without extracting",
     )
     return parser
@@ -113,9 +121,7 @@ def main():
 
             # Write JSON output
             output_file = output_dir / f"{file_path.stem}.json"
-            output_file.write_text(
-                json.dumps(result.merged, indent=2, ensure_ascii=False)
-            )
+            output_file.write_text(json.dumps(result.merged, indent=2, ensure_ascii=False))
 
             conf_str = f", confidence {result.avg_conf}%" if result.avg_conf is not None else ""
             vr = result.validation
